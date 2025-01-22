@@ -3,12 +3,17 @@ package crypto
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
+	"regexp"
+	"unicode"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -81,6 +86,89 @@ func (e *AESEncryptor) Decrypt(ciphertext string) ([]byte, error) {
 func HashSHA256(data []byte) []byte {
 	hash := sha256.Sum256(data)
 	return hash[:]
+}
+
+// HashSHA512 计算 SHA512 哈希
+func HashSHA512(data []byte) []byte {
+	hash := sha512.Sum512(data)
+	return hash[:]
+}
+
+// HashMD5 计算 MD5 哈希（不推荐用于安全场景）
+func HashMD5(data []byte) []byte {
+	hash := md5.Sum(data)
+	return hash[:]
+}
+
+// PasswordPolicy 密码策略结构体
+type PasswordPolicy struct {
+	MinLength      int
+	MaxLength      int
+	RequireUpper   bool
+	RequireLower   bool
+	RequireNumber  bool
+	RequireSpecial bool
+	DisallowWords  []string
+}
+
+// NewDefaultPasswordPolicy 创建默认密码策略
+func NewDefaultPasswordPolicy() *PasswordPolicy {
+	return &PasswordPolicy{
+		MinLength:      8,
+		MaxLength:      32,
+		RequireUpper:   true,
+		RequireLower:   true,
+		RequireNumber:  true,
+		RequireSpecial: true,
+		DisallowWords:  []string{"password", "123456", "qwerty"},
+	}
+}
+
+// ValidatePassword 验证密码是否符合策略
+func (p *PasswordPolicy) ValidatePassword(password string) error {
+	if len(password) < p.MinLength {
+		return fmt.Errorf("密码长度不能小于 %d 个字符", p.MinLength)
+	}
+	if len(password) > p.MaxLength {
+		return fmt.Errorf("密码长度不能大于 %d 个字符", p.MaxLength)
+	}
+
+	var hasUpper, hasLower, hasNumber, hasSpecial bool
+	for _, char := range password {
+		switch {
+		case unicode.IsUpper(char):
+			hasUpper = true
+		case unicode.IsLower(char):
+			hasLower = true
+		case unicode.IsNumber(char):
+			hasNumber = true
+		case unicode.IsPunct(char) || unicode.IsSymbol(char):
+			hasSpecial = true
+		}
+	}
+
+	if p.RequireUpper && !hasUpper {
+		return errors.New("密码必须包含大写字母")
+	}
+	if p.RequireLower && !hasLower {
+		return errors.New("密码必须包含小写字母")
+	}
+	if p.RequireNumber && !hasNumber {
+		return errors.New("密码必须包含数字")
+	}
+	if p.RequireSpecial && !hasSpecial {
+		return errors.New("密码必须包含特殊字符")
+	}
+
+	// 检查禁用词
+	passwordLower := regexp.MustCompile(`[^a-zA-Z0-9]`).ReplaceAllString(password, "")
+	for _, word := range p.DisallowWords {
+		if regexp.MustCompile(`(?i)` + word).MatchString(passwordLower) {
+			return fmt.Errorf("密码不能包含常见词汇: %s", word)
+		}
+	}
+
+	return nil
 }
 
 // HashPassword 使用 bcrypt 算法对密码进行加密

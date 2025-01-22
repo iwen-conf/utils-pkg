@@ -1,10 +1,16 @@
 package url
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // URLBuilder URL 构建器
@@ -13,14 +19,18 @@ type URLBuilder struct {
 	params     map[string][]string
 	fragment   string
 	sortParams bool
+	secretKey  string
+	timestamp  int64
 }
 
 // NewURLBuilder 创建新的 URL 构建器
-func NewURLBuilder(baseURL string) *URLBuilder {
+func NewURLBuilder(baseURL string, secretKey string) *URLBuilder {
 	return &URLBuilder{
 		baseURL:    baseURL,
 		params:     make(map[string][]string),
 		sortParams: true,
+		secretKey:  secretKey,
+		timestamp:  time.Now().Unix(),
 	}
 }
 
@@ -54,6 +64,26 @@ func (b *URLBuilder) SetSortParams(sort bool) *URLBuilder {
 }
 
 // Build 构建完整的 URL
+// SetTimestamp 设置时间戳
+func (b *URLBuilder) SetTimestamp(timestamp int64) *URLBuilder {
+	b.timestamp = timestamp
+	return b
+}
+
+// generateSignature 生成签名
+func (b *URLBuilder) generateSignature(queryString string) string {
+	// 组合待签名字符串：时间戳 + 查询字符串
+	signStr := fmt.Sprintf("%d%s", b.timestamp, queryString)
+
+	// 使用 HMAC-SHA256 算法生成签名
+	h := hmac.New(sha256.New, []byte(b.secretKey))
+	h.Write([]byte(signStr))
+	signature := base64.StdEncoding.EncodeToString(h.Sum(nil))
+
+	return signature
+}
+
+// Build 构建完整的 URL
 func (b *URLBuilder) Build() (string, error) {
 	baseURL, err := url.Parse(b.baseURL)
 	if err != nil {
@@ -83,6 +113,17 @@ func (b *URLBuilder) Build() (string, error) {
 		}
 	}
 
+	// 添加时间戳参数
+	query.Set("_ts", fmt.Sprintf("%d", b.timestamp))
+
+	// 生成查询字符串
+	queryStr := query.Encode()
+
+	// 生成并添加签名
+	signature := b.generateSignature(queryStr)
+	query.Set("_sign", signature)
+
+	// 设置最终的查询字符串
 	baseURL.RawQuery = query.Encode()
 	if b.fragment != "" {
 		baseURL.Fragment = b.fragment
@@ -142,6 +183,51 @@ func SerializeParams(params map[string]interface{}) string {
 	}
 
 	return values.Encode()
+}
+
+// DeserializeParams 反序列化 URL 查询字符串为参数映射
+// ValidateSignature 验证 URL 签名
+func ValidateSignature(rawURL string, secretKey string, maxAgeSeconds int64) (bool, error) {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return false, err
+	}
+
+	// 获取查询参数
+	query := parsedURL.Query()
+
+	// 获取时间戳和签名
+	timestamp := query.Get("_ts")
+	signature := query.Get("_sign")
+
+	// 验证参数是否存在
+	if timestamp == "" || signature == "" {
+		return false, fmt.Errorf("missing timestamp or signature")
+	}
+
+	// 验证时间戳
+	ts, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		return false, err
+	}
+
+	// 检查时间戳是否过期
+	currentTime := time.Now().Unix()
+	if currentTime-ts > maxAgeSeconds {
+		return false, fmt.Errorf("url expired")
+	}
+
+	// 移除签名参数后重新生成签名
+	query.Del("_sign")
+	queryStr := query.Encode()
+
+	// 使用相同的算法生成签名
+	h := hmac.New(sha256.New, []byte(secretKey))
+	h.Write([]byte(fmt.Sprintf("%d%s", ts, queryStr)))
+	expectedSignature := base64.StdEncoding.EncodeToString(h.Sum(nil))
+
+	// 比较签名
+	return signature == expectedSignature, nil
 }
 
 // DeserializeParams 反序列化 URL 查询字符串为参数映射
