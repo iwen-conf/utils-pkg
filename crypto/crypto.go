@@ -5,9 +5,12 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"io"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Encryptor 加密器接口
@@ -78,6 +81,21 @@ func (e *AESEncryptor) Decrypt(ciphertext string) ([]byte, error) {
 func HashSHA256(data []byte) []byte {
 	hash := sha256.Sum256(data)
 	return hash[:]
+}
+
+// HashPassword 使用 bcrypt 算法对密码进行加密
+func HashPassword(password []byte) ([]byte, error) {
+	return bcrypt.GenerateFromPassword(password, bcrypt.DefaultCost)
+}
+
+// CompareHashAndPassword 安全地比较密码和其哈希值
+func CompareHashAndPassword(hashedPassword, password []byte) error {
+	return bcrypt.CompareHashAndPassword(hashedPassword, password)
+}
+
+// SecureCompare 使用恒定时间比较两个字节切片
+func SecureCompare(a, b []byte) bool {
+	return subtle.ConstantTimeCompare(a, b) == 1
 }
 
 // GenerateRandomBytes 生成指定长度的随机字节
