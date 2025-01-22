@@ -35,17 +35,128 @@ go get github.com/your-username/utils-pkg
 
 ### JWT 示例
 ```go
-// TODO: 添加 JWT 使用示例
+package main
+
+import (
+    "fmt"
+    "time"
+    "utils-pkg/jwt"
+)
+
+func main() {
+    // 创建 JWT 管理器
+    jwtManager := jwt.NewJWTManager("your-secret-key", 24*time.Hour)
+
+    // 生成 token
+    userID := "12345"
+    username := "john_doe"
+    extra := map[string]interface{}{
+        "role": "admin",
+    }
+    
+    token, err := jwtManager.GenerateToken(userID, username, extra)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("Generated token: %s\n", token)
+
+    // 验证和解析 token
+    claims, err := jwtManager.ValidateToken(token)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("Validated token claims: %+v\n", claims)
+}
 ```
 
 ### 加密示例
 ```go
-// TODO: 添加加密使用示例
+package main
+
+import (
+    "fmt"
+    "utils-pkg/crypto"
+)
+
+func main() {
+    // 创建 AES 加密器（密钥长度必须是 16、24 或 32 字节）
+    key := []byte("0123456789abcdef") // 16 字节的密钥
+    encryptor, err := crypto.NewAESEncryptor(key)
+    if err != nil {
+        panic(err)
+    }
+
+    // 加密数据
+    plaintext := []byte("Hello, World!")
+    ciphertext, err := encryptor.Encrypt(plaintext)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("加密后的数据: %s\n", ciphertext)
+
+    // 解密数据
+    decrypted, err := encryptor.Decrypt(ciphertext)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("解密后的数据: %s\n", string(decrypted))
+
+    // 计算 SHA256 哈希
+    hash := crypto.HashSHA256(plaintext)
+    fmt.Printf("SHA256 哈希值: %x\n", hash)
+
+    // 生成随机字节
+    randomBytes, err := crypto.GenerateRandomBytes(16)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("随机字节: %x\n", randomBytes)
+}
 ```
 
 ### URL 示例
 ```go
-// TODO: 添加 URL 使用示例
+package main
+
+import (
+    "fmt"
+    "utils-pkg/url"
+)
+
+func main() {
+    // 使用 URLBuilder 构建 URL
+    builder := url.NewURLBuilder("https://api.example.com/users")
+    builder.AddParam("page", "1")
+    builder.AddParam("limit", "10")
+    builder.AddParam("sort", "name")
+    builder.SetFragment("top")
+
+    fullURL, err := builder.Build()
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("构建的 URL: %s\n", fullURL)
+
+    // 解析 URL
+    parsedURL, err := url.ParseURL(fullURL)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("解析的 URL 组成部分: %+v\n", parsedURL)
+
+    // 序列化参数
+    params := map[string]interface{}{
+        "id": "123",
+        "tags": []string{"go", "utils"},
+        "filter": map[string]string{"status": "active"},
+    }
+    queryString := url.SerializeParams(params)
+    fmt.Printf("序列化的查询参数: %s\n", queryString)
+
+    // 反序列化参数
+    deserializedParams := url.DeserializeParams(queryString)
+    fmt.Printf("反序列化的参数: %+v\n", deserializedParams)
+}
 ```
 
 ## 贡献
