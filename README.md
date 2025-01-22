@@ -13,13 +13,13 @@
 
 ## 依赖要求
 
-- Go 1.16 或更高版本
+- Go 1.21 或更高版本
 - github.com/golang-jwt/jwt/v5（仅 JWT 模块需要）
 
 ## 安装
 
 ```bash
-go get github.com/your-username/utils-pkg
+go get github.com/iwen-conf/utils-pkg
 ```
 
 ## 功能模块
