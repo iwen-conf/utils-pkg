@@ -42,10 +42,16 @@ func NewJWTManager(secretKey string, expires time.Duration) *JWTManager {
 }
 
 // GenerateToken 生成 JWT token
-func (m *JWTManager) GenerateToken(userID, username string, extra map[string]interface{}) (string, error) {
+func (m *JWTManager) GenerateToken(userID, username string, extra map[string]interface{}, customExpires ...time.Duration) (string, error) {
+	// 确定过期时间：如果提供了自定义过期时间，则使用自定义时间，否则使用默认时间
+	expires := m.expires
+	if len(customExpires) > 0 && customExpires[0] > 0 {
+		expires = customExpires[0]
+	}
+
 	claims := &Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(m.expires)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expires)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 		},
