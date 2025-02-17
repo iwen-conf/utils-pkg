@@ -11,7 +11,7 @@ var (
 	chromeRegex  = regexp.MustCompile(`(?i)chrome\/[\d.]+`)
 	safariRegex  = regexp.MustCompile(`(?i)safari\/[\d.]+`)
 	firefoxRegex = regexp.MustCompile(`(?i)firefox\/[\d.]+`)
-	edgeRegex    = regexp.MustCompile(`(?i)edge\/[\d.]+`)
+	edgeRegex    = regexp.MustCompile(`(?i)(?:edge|edg)\/[\d.]+`)
 	operaRegex   = regexp.MustCompile(`(?i)opr\/[\d.]+`)
 	ieRegex      = regexp.MustCompile(`(?i)msie [\d.]+|trident\/[\d.]+`)
 
@@ -83,8 +83,6 @@ func IsBrowser(userAgent string) bool {
 	if userAgent == "" {
 		return false
 	}
-
-	// 检查缓存
 	isBrowserCache.RLock()
 	if result, ok := isBrowserCache.data[userAgent].(bool); ok {
 		isBrowserCache.RUnlock()
@@ -157,8 +155,10 @@ func GetBrowserInfo(userAgent string) BrowserInfo {
 		result = extractBrowserInfo(userAgent, "Edge", edgeRegex)
 	case operaRegex.MatchString(userAgent):
 		result = extractBrowserInfo(userAgent, "Opera", operaRegex)
-	case chromeRegex.MatchString(userAgent) && !edgeRegex.MatchString(userAgent):
-		result = extractBrowserInfo(userAgent, "Chrome", chromeRegex)
+	case chromeRegex.MatchString(userAgent):
+		if !edgeRegex.MatchString(userAgent) && !operaRegex.MatchString(userAgent) {
+			result = extractBrowserInfo(userAgent, "Chrome", chromeRegex)
+		}
 	case firefoxRegex.MatchString(userAgent):
 		result = extractBrowserInfo(userAgent, "Firefox", firefoxRegex)
 	case ieRegex.MatchString(userAgent):

@@ -1,6 +1,6 @@
 # Utils-pkg
 
-这是一个功能丰富的 Go 工具函数包，提供了 JWT、加密和 URL 处理等常用功能的标准实现。本项目注重安全性、易用性和性能，适用于各类 Go 项目的开发。
+这是一个功能丰富的 Go 工具函数包，提供了 JWT、加密、URL 处理、User-Agent 解析和切片操作等常用功能的标准实现。本项目注重安全性、易用性和性能，适用于各类 Go 项目的开发。
 
 ## 特性
 
@@ -15,6 +15,7 @@
 
 - Go 1.21 或更高版本
 - github.com/golang-jwt/jwt/v5（仅 JWT 模块需要）
+- golang.org/x/exp（仅 slice 模块需要）
 
 ## 安装
 
@@ -87,6 +88,48 @@ go get github.com/iwen-conf/utils-pkg
 - 参数预排序
 - 复用 URL 解析器
 - 高效的签名算法
+
+### User-Agent 模块 (`useragent/`)
+
+提供高效的浏览器 User-Agent 解析功能：
+
+#### 核心功能
+- 快速识别浏览器类型
+- 提取浏览器版本信息
+- 区分爬虫和真实用户
+- 高性能缓存机制
+
+#### 使用场景
+- 浏览器兼容性检测
+- 爬虫识别和管理
+- 访问统计分析
+- 设备适配优化
+
+#### 性能优化
+- 预编译正则表达式
+- 使用 sync.RWMutex 实现并发安全的缓存
+- 常见标识符快速查找
+
+### 切片操作模块 (`slice/`)
+
+提供泛型支持的切片操作工具：
+
+#### 核心功能
+- 元素查找和包含判断
+- 切片去重操作
+- 集合运算（交集、并集、差集）
+- 函数式操作（Filter、Map、Reduce）
+
+#### 使用场景
+- 数据处理和转换
+- 集合运算
+- 数据过滤和映射
+- 列表去重和合并
+
+#### 性能优化
+- 使用泛型减少代码重复
+- 预分配内存优化性能
+- 高效的 map 实现去重
 
 ## 详细使用示例
 
@@ -262,116 +305,90 @@ func main() {
 }
 ```
 
-## 安全性建议
+### User-Agent 示例
+```go
+package main
 
-### JWT 安全
-- 使用足够长的密钥（至少 32 字节）
-- 设置合理的过期时间（建议 24 小时内）
-- 敏感操作必须验证 token
-- 使用 HTTPS 传输
-- 定期清理黑名单
-- 使用自定义验证器控制权限
+import (
+    "fmt"
+    "utils-pkg/useragent"
+)
 
-### 加密安全
-- 优先使用 AES-256
-- 定期轮换密钥
-- 避免使用 MD5
-- 安全存储密钥
-- 强制密码策略
-- 使用 bcrypt 存储密码
-- 使用密码学安全的随机数
+func main() {
+    // 示例 User-Agent 字符串
+    ua := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 
-### URL 安全
-- URL 参数必须编码
-- 验证参数合法性
-- 处理特殊字符
-- 注意长度限制
-- 使用签名防篡改
-- 合理设置时间戳有效期
-- 加密敏感参数
+    // 快速检查是否为浏览器请求
+    if useragent.IsBrowser(ua) {
+        fmt.Println("这是一个浏览器请求")
+    }
 
-## 性能优化
+    // 获取浏览器详细信息
+    info := useragent.GetBrowserInfo(ua)
+    fmt.Printf("浏览器名称: %s\n", info.Name)
+    fmt.Printf("浏览器版本: %s\n", info.Version)
 
-### 通用建议
-- 复用对象和连接
-- 使用适当的缓存策略
-- 避免不必要的内存分配
-- 合理设置并发控制
+    // 检查是否为爬虫
+    botUA := "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+    if !useragent.IsBrowser(botUA) {
+        fmt.Println("这可能是一个爬虫请求")
+    }
+}
+```
 
-### 模块优化
-1. JWT 模块
-   - 使用 sync.Pool 缓存 token 解析器
-   - 定期批量清理黑名单
-   - 使用读写锁优化并发
+### 切片操作示例
+```go
+package main
 
-2. 加密模块
-   - 复用 AES 密码块
-   - 预分配缓冲区
-   - 使用 CFB 模式提升性能
+import (
+    "fmt"
+    "utils-pkg/slice"
+)
 
-3. URL 模块
-   - 预排序参数提升签名效率
-   - 复用 URL 解析器
-   - 优化序列化性能
+func main() {
+    // 基本切片操作
+    numbers := []int{1, 2, 2, 3, 3, 4, 5}
+    
+    // 去重
+    unique := slice.Unique(numbers)
+    fmt.Println("去重后:", unique) // [1 2 3 4 5]
 
-## 常见问题
+    // 检查元素是否存在
+    exists := slice.Contains(numbers, 3)
+    fmt.Println("包含 3:", exists) // true
 
-### JWT 相关
-1. Token 过期处理
-   - 实现令牌刷新机制
-   - 提前通知客户端刷新
-   - 使用滑动过期时间
+    // 集合操作
+    set1 := []int{1, 2, 3, 4}
+    set2 := []int{3, 4, 5, 6}
 
-2. 并发控制
-   - 使用读写锁控制黑名单访问
-   - 定期清理过期记录
-   - 合理设置缓存大小
+    // 交集
+    intersection := slice.Intersection(set1, set2)
+    fmt.Println("交集:", intersection) // [3 4]
 
-### 加密相关
-1. 密钥管理
-   - 使用密钥管理服务
-   - 定期轮换密钥
-   - 安全存储密钥
+    // 并集
+    union := slice.Union(set1, set2)
+    fmt.Println("并集:", union) // [1 2 3 4 5 6]
 
-2. 性能问题
-   - 选择合适的加密模式
-   - 复用加密对象
-   - 使用适当的缓冲区大小
+    // 差集
+    diff := slice.Difference(set1, set2)
+    fmt.Println("差集:", diff) // [1 2]
 
-### URL 相关
-1. 参数处理
-   - 正确处理特殊字符
-   - 注意 URL 长度限制
-   - 处理多值参数
+    // 函数式操作
+    // 过滤偶数
+    even := slice.Filter(numbers, func(n int) bool {
+        return n%2 == 0
+    })
+    fmt.Println("偶数:", even) // [2 2 4]
 
-2. 签名验证
-   - 时间戳偏差处理
-   - 参数顺序一致性
-   - 处理 URL 编码问题
+    // 映射操作：每个数乘以 2
+    doubled := slice.Map(numbers, func(n int) int {
+        return n * 2
+    })
+    fmt.Println("加倍:", doubled) // [2 4 4 6 6 8 10]
 
-## 贡献指南
-
-1. Fork 项目
-2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m 'Add some amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 创建 Pull Request
-
-### 贡献要求
-
-- 遵循项目代码风格
-- 添加完整的单元测试
-- 更新相关文档
-- 遵循语义化版本规范
-
-## 许可证
-
-MIT License
-
-## 问题反馈
-
-如果你发现任何问题或有改进建议，欢迎：
-
-1. 提交 Issue
-2. 发送 Pull Request
-3. 联系维护者
+    // 归约操作：求和
+    sum := slice.Reduce(numbers, 0, func(acc int, n int) int {
+        return acc + n
+    })
+    fmt.Println("总和:", sum) // 20
+}
