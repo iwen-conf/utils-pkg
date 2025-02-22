@@ -238,33 +238,37 @@ import (
 
 func main() {
     // 创建认证管理器实例
-    authManager := auth.NewManager("your-secret-key")
+    authManager := auth.NewAuthManager(
+        "your-secret-key",
+        time.Hour,      // 访问令牌过期时间
+        24*time.Hour,   // 刷新令牌过期时间
+    )
 
-    // 生成访问令牌和刷新令牌
+    // 生成访问令牌和刷新令牌对
     userID := "123"
-    accessToken, refreshToken, err := authManager.GenerateTokenPair(userID, nil)
+    tokenPair, err := authManager.GenerateTokenPair(userID, nil)
     if err != nil {
         panic(err)
     }
-    fmt.Printf("访问令牌: %s\n", accessToken)
-    fmt.Printf("刷新令牌: %s\n", refreshToken)
+    fmt.Printf("访问令牌: %s\n", tokenPair.AccessToken)
+    fmt.Printf("刷新令牌: %s\n", tokenPair.RefreshToken)
 
     // 验证访问令牌
-    claims, err := authManager.ValidateAccessToken(accessToken)
+    claims, err := authManager.ValidateAccessToken(tokenPair.AccessToken)
     if err != nil {
         panic(err)
     }
     fmt.Printf("用户ID: %s\n", claims.UserID)
 
-    // 使用刷新令牌更新访问令牌
-    newAccessToken, err := authManager.RefreshToken(refreshToken)
+    // 使用刷新令牌获取新的令牌对
+    newTokenPair, err := authManager.RefreshAccessToken(tokenPair.RefreshToken)
     if err != nil {
         panic(err)
     }
-    fmt.Printf("新的访问令牌: %s\n", newAccessToken)
+    fmt.Printf("新的访问令牌: %s\n", newTokenPair.AccessToken)
 
-    // 撤销令牌
-    err = authManager.RevokeToken(accessToken)
+    // 撤销刷新令牌
+    err = authManager.RevokeRefreshToken(tokenPair.RefreshToken)
     if err != nil {
         panic(err)
     }
@@ -354,28 +358,28 @@ import (
 )
 
 func main() {
-    // 创建 JWT 实例
-    j := jwt.New("your-secret-key")
+    // 创建 JWT 管理器实例
+    jwtManager := jwt.NewJWTManager("your-secret-key", 24*time.Hour)
 
     // 生成令牌
     claims := map[string]interface{}{
-        "user_id": 123,
         "role": "admin",
     }
-    token, err := j.GenerateToken(claims, 24*time.Hour)
+    token, err := jwtManager.GenerateToken("123", claims)
     if err != nil {
         panic(err)
     }
 
     // 验证令牌
-    parsedClaims, err := j.ValidateToken(token)
+    parsedClaims, err := jwtManager.ValidateToken(token)
     if err != nil {
         panic(err)
     }
-    fmt.Printf("用户ID: %v\n", parsedClaims["user_id"])
+    fmt.Printf("用户ID: %s\n", parsedClaims.UserID)
+    fmt.Printf("角色: %v\n", parsedClaims.Extra["role"])
 
     // 加入黑名单
-    err = j.AddToBlacklist(token)
+    err = jwtManager.AddToBlacklist(token)
     if err != nil {
         panic(err)
     }
@@ -393,32 +397,40 @@ import (
 )
 
 func main() {
-    // AES 加密
-    key := "your-32-byte-secret-key-here!!!!!"
-    data := "sensitive data"
-    
-    encrypted, err := crypto.AESEncrypt([]byte(data), []byte(key))
+    // 创建 AES 加密器
+    key := []byte("your-32-byte-secret-key-here!!!!!")
+    encryptor, err := crypto.NewAESEncryptor(key)
     if err != nil {
         panic(err)
     }
 
-    // AES 解密
-    decrypted, err := crypto.AESDecrypt(encrypted, []byte(key))
+    // 加密数据
+    plaintext := []byte("sensitive data")
+    encrypted, err := encryptor.Encrypt(plaintext)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("加密后的数据: %s\n", encrypted)
+
+    // 解密数据
+    decrypted, err := encryptor.Decrypt(encrypted)
     if err != nil {
         panic(err)
     }
     fmt.Printf("解密后的数据: %s\n", string(decrypted))
 
+    // 计算哈希
+    data := []byte("hello world")
+    sha256Hash := crypto.HashSHA256(data)
+    fmt.Printf("SHA256哈希: %x\n", sha256Hash)
+
     // 密码哈希
-    password := "user-password"
-    hash, err := crypto.HashPassword(password)
+    password := []byte("user-password")
+    hash, err := bcrypt.GenerateFromPassword(password, bcrypt.DefaultCost)
     if err != nil {
         panic(err)
     }
-
-    // 验证密码
-    isValid := crypto.ValidatePassword(password, hash)
-    fmt.Printf("密码是否有效: %v\n", isValid)
+    fmt.Printf("密码哈希: %s\n", hash)
 }
 ```
 
