@@ -98,3 +98,41 @@ func TestGetBrowserInfo(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkIsBrowser(b *testing.B) {
+	userAgents := []string{
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
+		"Googlebot/2.1 (+http://www.google.com/bot.html)",
+		"",
+	}
+
+	for _, ua := range userAgents {
+		b.Run(ua, func(b *testing.B) {
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				IsBrowser(ua)
+			}
+		})
+	}
+}
+
+func BenchmarkGetBrowserInfo(b *testing.B) {
+	userAgents := []string{
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.59",
+		"Googlebot/2.1 (+http://www.google.com/bot.html)",
+		"",
+	}
+
+	for _, ua := range userAgents {
+		b.Run(ua, func(b *testing.B) {
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				GetBrowserInfo(ua)
+			}
+		})
+	}
+}

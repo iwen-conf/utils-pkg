@@ -190,3 +190,89 @@ func TestSort(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkSliceOperations(b *testing.B) {
+	slice1 := []int{1, 2, 3, 4, 5}
+	slice2 := []int{4, 5, 6, 7, 8}
+
+	b.Run("Contains", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = Contains(slice1, 3)
+		}
+	})
+
+	b.Run("Unique", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = Unique(slice1)
+		}
+	})
+
+	b.Run("Intersection", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = Intersection(slice1, slice2)
+		}
+	})
+
+	b.Run("Union", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = Union(slice1, slice2)
+		}
+	})
+
+	b.Run("Difference", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = Difference(slice1, slice2)
+		}
+	})
+}
+
+func TestSliceOperations_Parallel(t *testing.T) {
+	tests := []struct {
+		name     string
+		slice1   []int
+		slice2   []int
+		expected []int
+		opType   string
+	}{
+		{
+			name:     "交集-有重叠元素",
+			slice1:   []int{1, 2, 3},
+			slice2:   []int{2, 3, 4},
+			expected: []int{2, 3},
+			opType:   "intersection",
+		},
+		{
+			name:     "并集-有重复元素",
+			slice1:   []int{1, 2},
+			slice2:   []int{2, 3},
+			expected: []int{1, 2, 3},
+			opType:   "union",
+		},
+		{
+			name:     "差集-有差异元素",
+			slice1:   []int{1, 2, 3},
+			slice2:   []int{2, 3},
+			expected: []int{1},
+			opType:   "difference",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt // 捕获循环变量
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var result []int
+			switch tt.opType {
+			case "intersection":
+				result = Intersection(tt.slice1, tt.slice2)
+			case "union":
+				result = Union(tt.slice1, tt.slice2)
+			case "difference":
+				result = Difference(tt.slice1, tt.slice2)
+			}
+			if !reflect.DeepEqual(result, tt.expected) {
+				t.Errorf("%s = %v, want %v", tt.opType, result, tt.expected)
+			}
+		})
+	}
+}

@@ -190,3 +190,90 @@ func TestGenerateRandomBytes(t *testing.T) {
 		t.Error("Generated random bytes should not be equal")
 	}
 }
+
+func BenchmarkAESEncryptor_Encrypt(b *testing.B) {
+	key := make([]byte, 32)
+	encryptor, _ := NewAESEncryptor(key)
+	plaintext := []byte("Hello, World!")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = encryptor.Encrypt(plaintext)
+	}
+}
+
+func BenchmarkAESEncryptor_Decrypt(b *testing.B) {
+	key := make([]byte, 32)
+	encryptor, _ := NewAESEncryptor(key)
+	plaintext := []byte("Hello, World!")
+	ciphertext, _ := encryptor.Encrypt(plaintext)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = encryptor.Decrypt(ciphertext)
+	}
+}
+
+func BenchmarkHashFunctions(b *testing.B) {
+	data := []byte("test data")
+
+	b.Run("SHA256", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = HashSHA256(data)
+		}
+	})
+
+	b.Run("SHA512", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = HashSHA512(data)
+		}
+	})
+
+	b.Run("MD5", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = HashMD5(data)
+		}
+	})
+}
+
+func TestPasswordPolicy_Parallel(t *testing.T) {
+	tests := []struct {
+		name     string
+		password string
+		wantErr  bool
+	}{
+		{
+			name:     "有效密码",
+			password: "Test123!@#",
+			wantErr:  false,
+		},
+		{
+			name:     "密码过短",
+			password: "Abc123!",
+			wantErr:  true,
+		},
+		{
+			name:     "缺少大写字母",
+			password: "abcdefgh123!",
+			wantErr:  true,
+		},
+		{
+			name:     "缺少特殊字符",
+			password: "Abcdefgh123",
+			wantErr:  true,
+		},
+	}
+
+	policy := NewDefaultPasswordPolicy()
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := policy.ValidatePassword(tc.password)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("ValidatePassword() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}

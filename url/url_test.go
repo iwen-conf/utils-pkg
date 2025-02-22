@@ -213,3 +213,69 @@ func TestDeserializeParams(t *testing.T) {
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
+
+func BenchmarkURLBuilder_Build(b *testing.B) {
+	builder := NewURLBuilder("https://example.com", "secret")
+	builder.AddParam("key1", "value1")
+	builder.AddParam("key2", "value2")
+	builder.SetFragment("section1")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := builder.Build()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkValidateSignature(b *testing.B) {
+	builder := NewURLBuilder("https://example.com", "secret")
+	builder.AddParam("key1", "value1")
+	url, err := builder.Build()
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := ValidateSignature(url, "secret", 3600)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkParseURL(b *testing.B) {
+	testURL := "https://example.com/path?key1=value1&key2=value2#fragment"
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := ParseURL(testURL)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkSerializeParams(b *testing.B) {
+	params := map[string]interface{}{
+		"string":     "value",
+		"stringSlice": []string{"value1", "value2"},
+		"object":     map[string]string{"key": "value"},
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		SerializeParams(params)
+	}
+}
+
+func BenchmarkDeserializeParams(b *testing.B) {
+	queryString := "key1=value1&key2=value2&array=item1&array=item2"
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		DeserializeParams(queryString)
+	}
+}

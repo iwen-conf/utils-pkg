@@ -11,9 +11,8 @@ import (
 // Claims 自定义的 JWT Claims 结构体
 type Claims struct {
 	jwt.RegisteredClaims
-	UserID   string                 `json:"user_id"`
-	Username string                 `json:"username"`
-	Extra    map[string]interface{} `json:"extra,omitempty"`
+	UserID string                 `json:"user_id"`
+	Extra  map[string]interface{} `json:"extra,omitempty"`
 }
 
 // JWTManager JWT 管理器
@@ -42,7 +41,12 @@ func NewJWTManager(secretKey string, expires time.Duration) *JWTManager {
 }
 
 // GenerateToken 生成 JWT token
-func (m *JWTManager) GenerateToken(userID, username string, extra map[string]interface{}, customExpires ...time.Duration) (string, error) {
+func (m *JWTManager) GenerateToken(userID string, extra map[string]interface{}, customExpires ...time.Duration) (string, error) {
+	// 验证用户ID不能为空
+	if userID == "" {
+		return "", errors.New("user ID cannot be empty")
+	}
+
 	// 确定过期时间：如果提供了自定义过期时间，则使用自定义时间，否则使用默认时间
 	expires := m.expires
 	if len(customExpires) > 0 && customExpires[0] > 0 {
@@ -55,9 +59,8 @@ func (m *JWTManager) GenerateToken(userID, username string, extra map[string]int
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 		},
-		UserID:   userID,
-		Username: username,
-		Extra:    extra,
+		UserID: userID,
+		Extra:  extra,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
