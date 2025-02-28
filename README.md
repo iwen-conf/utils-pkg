@@ -85,6 +85,35 @@ go get github.com/iwen-conf/utils-pkg
 - 验证器链式调用，提高扩展性
 - 使用对象池复用 Claims 结构体
 
+### Storage 模块 (`storage/`)
+
+提供安全高效的文件存储和管理解决方案：
+
+#### 核心功能
+
+- 单文件和多文件上传处理
+- 文件类型和大小验证
+- 自动生成唯一文件名
+- 安全的文件名处理
+- 文件目录自动创建
+- 文件类型检测
+
+#### 使用场景
+
+- Web 应用的文件上传功能
+- 用户头像和图片管理
+- 文档存储系统
+- 多媒体资源管理
+- 临时文件处理
+
+#### 性能优化
+
+- 流式文件处理减少内存占用
+- 文件类型快速检测
+- 并发安全的文件操作
+- 高效的文件名生成算法
+- 批量文件处理优化
+
 ### 加密模块 (`crypto/`)
 
 提供全面的加密和哈希功能：
@@ -292,7 +321,7 @@ func main() {
     // AES 加密解密
     key := "your-32-byte-secret-key-here!!!!!"
     plaintext := "sensitive data"
-    
+
     // 加密数据
     encrypted, err := cryptoManager.AESEncrypt([]byte(plaintext), []byte(key))
     if err != nil {
@@ -309,7 +338,7 @@ func main() {
 
     // 密码哈希和验证
     password := "user-password"
-    
+
     // 生成密码哈希
     hash, err := cryptoManager.HashPassword(password)
     if err != nil {
@@ -336,7 +365,7 @@ func main() {
         RequireNumber:  true,
         RequireSpecial: true,
     }
-    
+
     err = cryptoManager.ValidatePasswordPolicy("Test123!@#", passwordPolicy)
     if err != nil {
         fmt.Printf("密码不符合策略: %v\n", err)
@@ -451,7 +480,7 @@ func main() {
         "name": "test",
     }
     secret := "your-secret-key"
-    
+
     signedURL, err := url.SignURL("https://api.example.com", params, secret)
     if err != nil {
         panic(err)
@@ -476,10 +505,10 @@ import (
 
 func main() {
     ua := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    
+
     // 解析 User-Agent
     info := useragent.Parse(ua)
-    
+
     fmt.Printf("浏览器: %s\n", info.Browser)
     fmt.Printf("版本: %s\n", info.Version)
     fmt.Printf("操作系统: %s\n", info.OS)
@@ -521,6 +550,71 @@ func main() {
     // 切片差集
     difference := slice.Difference(slice1, slice2)
     fmt.Printf("差集: %v\n", difference)
+}
+```
+
+### Storage 模块示例
+
+```go
+package main
+
+import (
+    "fmt"
+    "github.com/cloudwego/hertz/pkg/app"
+    "github.com/iwen-conf/utils-pkg/storage"
+)
+
+func main() {
+    // 创建一个模拟的 Hertz 上下文（实际使用时会由框架提供）
+    var c *app.RequestContext
+
+    // 设置文件上传选项
+    options := storage.FileUploadOptions{
+        MaxFileSize:        5 * 1024 * 1024,  // 限制单个文件大小为5MB
+        AllowedFileTypes:   []string{"image/jpeg", "image/png"},  // 只允许上传jpg和png图片
+        GenerateUniqueName: true,  // 生成唯一文件名
+        PreserveExtension: true,   // 保留文件扩展名
+        SubPath:           "images",  // 文件保存在 uploadDir/images/ 目录下
+        MaxTotalSize:      20 * 1024 * 1024,  // 多文件上传时总大小限制为20MB
+    }
+
+    // 单文件上传
+    uploadDir := "/path/to/upload/dir"
+    result := storage.HandleFileUploadWithOptions(c, "file", uploadDir, options)
+    if result.Error != nil {
+        fmt.Printf("上传失败: %v\n", result.Error)
+    } else {
+        fmt.Printf("文件已保存到: %s\n", result.FilePath)
+        fmt.Printf("文件名: %s\n", result.FileName)
+        fmt.Printf("文件大小: %d bytes\n", result.FileSize)
+        fmt.Printf("文件类型: %s\n", result.ContentType)
+    }
+
+    // 多文件上传
+    multiResult := storage.HandleMultiFileUpload(c, "files", uploadDir, options)
+    fmt.Printf("成功上传: %d 个文件\n", multiResult.SuccessCount)
+    fmt.Printf("上传失败: %d 个文件\n", multiResult.FailCount)
+    fmt.Printf("总大小: %d bytes\n", multiResult.TotalSize)
+
+    // 遍历每个文件的结果
+    for _, fileResult := range multiResult.Files {
+        if fileResult.Error != nil {
+            fmt.Printf("文件 %s 上传失败: %v\n", fileResult.FileName, fileResult.Error)
+        } else {
+            fmt.Printf("文件 %s 上传成功，保存在: %s\n", fileResult.FileName, fileResult.FilePath)
+        }
+    }
+
+    // 检查文件类型
+    contentType := "image/jpeg"
+    if storage.IsImageFile(contentType) {
+        fmt.Println("这是一个图片文件")
+    }
+
+    // 获取安全的文件名
+    unsafeFilename := "unsafe/file*name?.jpg"
+    safeFilename := storage.GetSafeFilename(unsafeFilename)
+    fmt.Printf("安全的文件名: %s\n", safeFilename)
 }
 ```
 
