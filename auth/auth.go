@@ -76,7 +76,7 @@ func (m *AuthManager) RefreshAccessToken(refreshToken string) (*TokenPair, error
 	}
 
 	// 确保是刷新令牌
-	if claims.Extra["token_type"] != "refresh" {
+	if claims.Extra == nil || claims.Extra["token_type"] != "refresh" {
 		return nil, errors.New("invalid refresh token")
 	}
 
@@ -89,8 +89,26 @@ func (m *AuthManager) RefreshAccessToken(refreshToken string) (*TokenPair, error
 		return nil, errors.New("refresh token not found")
 	}
 
+	// 创建新的额外信息，不包含token_type
+	userExtra := make(map[string]interface{})
+	for k, v := range claims.Extra {
+		if k != "token_type" {
+			userExtra[k] = v
+		}
+	}
+
 	// 生成新的令牌对
-	return m.GenerateTokenPair(userID, claims.Extra)
+	newTokenPair, err := m.GenerateTokenPair(userID, userExtra)
+	if err != nil {
+		return nil, err
+	}
+
+	// 可选：撤销旧的刷新令牌
+	m.refreshTokensLock.Lock()
+	delete(m.refreshTokens, refreshToken)
+	m.refreshTokensLock.Unlock()
+
+	return newTokenPair, nil
 }
 
 // RevokeRefreshToken 撤销刷新令牌
