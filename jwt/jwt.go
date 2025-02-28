@@ -44,7 +44,7 @@ func NewJWTManager(secretKey string, expires time.Duration) *JWTManager {
 func (m *JWTManager) GenerateToken(userID string, extra map[string]interface{}, customExpires ...time.Duration) (string, error) {
 	// 验证用户ID不能为空
 	if userID == "" {
-		return "", errors.New("user ID cannot be empty")
+		return "", errors.New("用户ID不能为空")
 	}
 
 	// 确定过期时间：如果提供了自定义过期时间，则使用自定义时间，否则使用默认时间
@@ -71,7 +71,7 @@ func (m *JWTManager) GenerateToken(userID string, extra map[string]interface{}, 
 func (m *JWTManager) ValidateToken(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, errors.New("unexpected signing method")
+			return nil, errors.New("意外的签名方法")
 		}
 		return m.secretKey, nil
 	})
@@ -82,7 +82,7 @@ func (m *JWTManager) ValidateToken(tokenStr string) (*Claims, error) {
 
 	// 检查是否在黑名单中
 	if m.IsBlacklisted(tokenStr) {
-		return nil, errors.New("token is blacklisted")
+		return nil, errors.New("令牌已被列入黑名单")
 	}
 
 	if claims, ok := token.Claims.(*Claims); ok && token.Valid {
@@ -95,7 +95,7 @@ func (m *JWTManager) ValidateToken(tokenStr string) (*Claims, error) {
 		return claims, nil
 	}
 
-	return nil, errors.New("invalid token")
+	return nil, errors.New("无效的令牌")
 }
 
 // AddValidator 添加自定义声明验证器
@@ -105,9 +105,9 @@ func (m *JWTManager) AddValidator(validator ClaimValidator) {
 
 // AddToBlacklist 将 token 加入黑名单
 func (m *JWTManager) AddToBlacklist(tokenStr string, expireAt time.Time) error {
-	_, err := m.ValidateToken(tokenStr)
-	if err != nil {
-		return err
+	// 不再验证令牌，直接加入黑名单
+	if tokenStr == "" {
+		return errors.New("令牌不能为空")
 	}
 
 	m.blacklistLock.Lock()

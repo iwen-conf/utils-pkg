@@ -38,7 +38,7 @@ func NewAuthManager(secretKey string, accessExpires, refreshExpires time.Duratio
 func (m *AuthManager) GenerateTokenPair(userID string, extra map[string]interface{}) (*TokenPair, error) {
 	// 验证userID不能为空
 	if userID == "" {
-		return nil, errors.New("userID cannot be empty")
+		return nil, errors.New("用户ID不能为空")
 	}
 
 	// 生成访问令牌
@@ -69,24 +69,44 @@ func (m *AuthManager) GenerateTokenPair(userID string, extra map[string]interfac
 
 // RefreshAccessToken 使用刷新令牌获取新的访问令牌
 func (m *AuthManager) RefreshAccessToken(refreshToken string) (*TokenPair, error) {
-	// 验证刷新令牌
-	claims, err := m.jwtManager.ValidateToken(refreshToken)
-	if err != nil {
-		return nil, err
+	// 首先检查令牌是否为空
+	if refreshToken == "" {
+		return nil, errors.New("刷新令牌不能为空")
 	}
 
-	// 确保是刷新令牌
-	if claims.Extra == nil || claims.Extra["token_type"] != "refresh" {
-		return nil, errors.New("invalid refresh token")
+	// 检查刷新令牌是否在黑名单中
+	if m.jwtManager.IsBlacklisted(refreshToken) {
+		return nil, errors.New("刷新令牌已被列入黑名单")
 	}
 
-	// 检查刷新令牌是否在存储中
+	// 检查刷新令牌是否在存储中（先检查存储，避免不必要的验证）
 	m.refreshTokensLock.RLock()
 	userID, exists := m.refreshTokens[refreshToken]
 	m.refreshTokensLock.RUnlock()
 
 	if !exists {
-		return nil, errors.New("refresh token not found")
+		return nil, errors.New("未找到刷新令牌")
+	}
+
+	// 验证刷新令牌
+	claims, err := m.jwtManager.ValidateToken(refreshToken)
+	if err != nil {
+		// 如果验证失败，确保从存储中删除
+		m.refreshTokensLock.Lock()
+		delete(m.refreshTokens, refreshToken)
+		m.refreshTokensLock.Unlock()
+		return nil, err
+	}
+
+	// 确保是刷新令牌
+	if claims.Extra == nil || claims.Extra["token_type"] != "refresh" {
+		// 如果不是刷新令牌，从存储中删除并加入黑名单
+		m.refreshTokensLock.Lock()
+		delete(m.refreshTokens, refreshToken)
+		m.refreshTokensLock.Unlock()
+		// 将无效令牌加入黑名单
+		_ = m.jwtManager.AddToBlacklist(refreshToken, time.Now().Add(m.refreshExpires))
+		return nil, errors.New("无效的刷新令牌")
 	}
 
 	// 创建新的额外信息，不包含token_type
@@ -103,10 +123,13 @@ func (m *AuthManager) RefreshAccessToken(refreshToken string) (*TokenPair, error
 		return nil, err
 	}
 
-	// 可选：撤销旧的刷新令牌
+	// 撤销旧的刷新令牌（不再是可选的）
 	m.refreshTokensLock.Lock()
 	delete(m.refreshTokens, refreshToken)
 	m.refreshTokensLock.Unlock()
+
+	// 将旧令牌加入黑名单
+	_ = m.jwtManager.AddToBlacklist(refreshToken, time.Now().Add(m.refreshExpires))
 
 	return newTokenPair, nil
 }
@@ -118,7 +141,7 @@ func (m *AuthManager) RevokeRefreshToken(refreshToken string) error {
 
 	// 检查令牌是否存在
 	if _, exists := m.refreshTokens[refreshToken]; !exists {
-		return errors.New("refresh token not found")
+		return errors.New("未找到刷新令牌")
 	}
 
 	// 从存储中删除刷新令牌
