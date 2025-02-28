@@ -97,6 +97,9 @@ go get github.com/iwen-conf/utils-pkg
 - 安全的文件名处理
 - 文件目录自动创建
 - 文件类型检测
+- 文件哈希计算（支持 MD5、SHA1、SHA256）
+- 文件去重存储
+- 文件完整性校验
 
 #### 使用场景
 
@@ -245,7 +248,15 @@ go get github.com/iwen-conf/utils-pkg
 - 注意浏览器版本兼容性
 - 处理未知 User-Agent
 
-### 5. 切片操作模块使用建议
+### 5. Storage 模块使用建议
+
+- 根据实际需求选择合适的哈希算法（SHA256 安全性高但较慢，MD5 速度快但安全性较低）
+- 对于大文件，考虑使用流式哈希计算而非一次性加载到内存
+- 启用文件去重功能可以节省存储空间，但需要权衡哈希计算的开销
+- 定期清理临时文件和无效文件
+- 对于高并发场景，注意文件锁和并发控制
+
+### 6. 切片操作模块使用建议
 
 - 预估切片容量
 - 使用适当的集合操作
@@ -504,14 +515,20 @@ import (
 )
 
 func main() {
-    ua := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    // 创建 User-Agent 解析器
+    parser := useragent.NewParser()
 
-    // 解析 User-Agent
-    info := useragent.Parse(ua)
+    // 解析 User-Agent 字符串
+    ua := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    info, err := parser.Parse(ua)
+    if err != nil {
+        panic(err)
+    }
 
     fmt.Printf("浏览器: %s\n", info.Browser)
     fmt.Printf("版本: %s\n", info.Version)
     fmt.Printf("操作系统: %s\n", info.OS)
+    fmt.Printf("设备类型: %s\n", info.DeviceType)
     fmt.Printf("是否移动设备: %v\n", info.IsMobile)
     fmt.Printf("是否爬虫: %v\n", info.IsBot)
 }
@@ -560,13 +577,15 @@ package main
 
 import (
     "fmt"
-    "github.com/cloudwego/hertz/pkg/app"
     "github.com/iwen-conf/utils-pkg/storage"
+    "os"
+    "path/filepath"
 )
 
 func main() {
-    // 创建一个模拟的 Hertz 上下文（实际使用时会由框架提供）
-    var c *app.RequestContext
+    // 创建文件存储管理器
+    uploadDir := "/path/to/uploads"
+    fileManager := storage.NewFileManager(uploadDir)
 
     // 设置文件上传选项
     options := storage.FileUploadOptions{
@@ -576,45 +595,65 @@ func main() {
         PreserveExtension: true,   // 保留文件扩展名
         SubPath:           "images",  // 文件保存在 uploadDir/images/ 目录下
         MaxTotalSize:      20 * 1024 * 1024,  // 多文件上传时总大小限制为20MB
+        EnableHash:        true,   // 启用文件哈希计算
+        HashAlgorithm:     "sha256",  // 使用SHA256算法
+        DeduplicationEnabled: true,  // 启用文件去重存储
     }
 
-    // 单文件上传
-    uploadDir := "/path/to/upload/dir"
-    result := storage.HandleFileUploadWithOptions(c, "file", uploadDir, options)
-    if result.Error != nil {
-        fmt.Printf("上传失败: %v\n", result.Error)
-    } else {
-        fmt.Printf("文件已保存到: %s\n", result.FilePath)
-        fmt.Printf("文件名: %s\n", result.FileName)
-        fmt.Printf("文件大小: %d bytes\n", result.FileSize)
-        fmt.Printf("文件类型: %s\n", result.ContentType)
+    // 打开要上传的文件
+    file, err := os.Open("example.jpg")
+    if err != nil {
+        panic(err)
+    }
+    defer file.Close()
+
+    // 上传单个文件
+    result, err := fileManager.SaveFile(file, "example.jpg", options)
+    if err != nil {
+        panic(err)
     }
 
-    // 多文件上传
-    multiResult := storage.HandleMultiFileUpload(c, "files", uploadDir, options)
-    fmt.Printf("成功上传: %d 个文件\n", multiResult.SuccessCount)
-    fmt.Printf("上传失败: %d 个文件\n", multiResult.FailCount)
-    fmt.Printf("总大小: %d bytes\n", multiResult.TotalSize)
+    fmt.Printf("保存路径: %s\n", result.Path)
+    fmt.Printf("文件大小: %d bytes\n", result.Size)
+    fmt.Printf("文件类型: %s\n", result.MimeType)
+    fmt.Printf("文件哈希: %s\n", result.Hash)
+    fmt.Printf("是否为重复文件: %v\n", result.IsDuplicate)
 
-    // 遍历每个文件的结果
-    for _, fileResult := range multiResult.Files {
-        if fileResult.Error != nil {
-            fmt.Printf("文件 %s 上传失败: %v\n", fileResult.FileName, fileResult.Error)
+    // 检查文件完整性
+    isValid, err := fileManager.VerifyFileIntegrity(result.Path, result.Hash, options.HashAlgorithm)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("文件完整性验证: %v\n", isValid)
+
+    // 多文件上传示例
+    files := []storage.FileToUpload{
+        {File: file, Filename: "example1.jpg"},
+        {File: file, Filename: "example2.jpg"},
+    }
+
+    results, err := fileManager.SaveMultipleFiles(files, options)
+    if err != nil {
+        panic(err)
+    }
+
+    // 处理重复文件
+    for _, res := range results {
+        if res.IsDuplicate {
+            fmt.Printf("文件 %s 是重复文件，使用已存在的文件: %s\n", res.OriginalName, res.Path)
         } else {
-            fmt.Printf("文件 %s 上传成功，保存在: %s\n", fileResult.FileName, fileResult.FilePath)
+            fmt.Printf("文件 %s 成功上传到: %s\n", res.OriginalName, res.Path)
         }
     }
 
-    // 检查文件类型
-    contentType := "image/jpeg"
-    if storage.IsImageFile(contentType) {
-        fmt.Println("这是一个图片文件")
+    // 获取文件哈希信息
+    hashInfo, err := fileManager.GetFileHashInfo(filepath.Join(uploadDir, "images", result.Filename))
+    if err != nil {
+        panic(err)
     }
-
-    // 获取安全的文件名
-    unsafeFilename := "unsafe/file*name?.jpg"
-    safeFilename := storage.GetSafeFilename(unsafeFilename)
-    fmt.Printf("安全的文件名: %s\n", safeFilename)
+    fmt.Printf("MD5: %s\n", hashInfo.MD5)
+    fmt.Printf("SHA1: %s\n", hashInfo.SHA1)
+    fmt.Printf("SHA256: %s\n", hashInfo.SHA256)
 }
 ```
 

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -43,6 +44,8 @@ type FileUploadOptions struct {
 	PreserveExtension  bool     // 生成唯一文件名时是否保留原文件扩展名
 	SubPath            string   // 上传目录下的子路径，为空则直接使用上传目录
 	MaxTotalSize       int64    // 多文件上传时的总大小限制，0表示不限制
+	UseFileHash        bool     // 是否使用文件哈希作为文件名并进行去重
+	HashAlgorithm      string   // 哈希算法，支持"md5"和"sha256"，默认为"sha256"
 }
 
 // DefaultFileUploadOptions 返回默认的文件上传选项
@@ -55,6 +58,8 @@ func DefaultFileUploadOptions() FileUploadOptions {
 		PreserveExtension:  true,             // 默认保留文件扩展名
 		SubPath:            "",               // 默认不使用子路径
 		MaxTotalSize:       50 * 1024 * 1024, // 默认50MB总大小限制
+		UseFileHash:        false,            // 默认不使用文件哈希去重
+		HashAlgorithm:      "sha256",         // 默认使用SHA-256哈希算法
 	}
 }
 
@@ -140,9 +145,34 @@ func HandleFileUploadWithOptions(c *app.RequestContext, formFieldName, uploadDir
 
 	// 准备文件名
 	filename := fileHeader.Filename
-	if options.GenerateUniqueName {
+	ext := filepath.Ext(filename)
+
+	// 如果启用了文件哈希
+	if options.UseFileHash {
+		// 计算文件哈希
+		hashValue, err := CalculateFileHash(file, options.HashAlgorithm)
+		if err != nil {
+			result.Error = fmt.Errorf("计算文件哈希失败: %w", err)
+			return result
+		}
+
+		// 检查是否存在相同哈希的文件
+		if exists, existingPath := CheckFileHashExists(hashValue, fullUploadDir, ext); exists {
+			// 文件已存在，直接返回现有文件的信息
+			result.FilePath = existingPath
+			result.FileName = filepath.Base(existingPath)
+			result.Uploaded = true
+			return result
+		}
+
+		// 使用哈希值作为文件名
 		if options.PreserveExtension {
-			ext := filepath.Ext(filename)
+			filename = hashValue + ext
+		} else {
+			filename = hashValue
+		}
+	} else if options.GenerateUniqueName {
+		if options.PreserveExtension {
 			baseFilename := strings.TrimSuffix(filename, ext)
 			filename = generateUniqueFilename(baseFilename) + ext
 		} else {
@@ -285,9 +315,49 @@ func HandleMultiFileUpload(c *app.RequestContext, formFieldName, uploadDir strin
 
 		// 准备文件名
 		filename := fileHeader.Filename
-		if options.GenerateUniqueName {
+		ext := filepath.Ext(filename)
+
+		// 如果启用了文件哈希
+		if options.UseFileHash {
+			// 打开文件以计算哈希
+			file, err := fileHeader.Open()
+			if err != nil {
+				fileResult.Error = fmt.Errorf("打开上传文件失败: %w", err)
+				result.Files = append(result.Files, fileResult)
+				result.FailCount++
+				continue
+			}
+			defer file.Close()
+
+			// 计算文件哈希
+			hashValue, err := CalculateFileHash(file, options.HashAlgorithm)
+			if err != nil {
+				fileResult.Error = fmt.Errorf("计算文件哈希失败: %w", err)
+				result.Files = append(result.Files, fileResult)
+				result.FailCount++
+				continue
+			}
+
+			// 检查是否存在相同哈希的文件
+			if exists, existingPath := CheckFileHashExists(hashValue, fullUploadDir, ext); exists {
+				// 文件已存在，直接返回现有文件的信息
+				fileResult.FilePath = existingPath
+				fileResult.FileName = filepath.Base(existingPath)
+				fileResult.Uploaded = true
+				result.Files = append(result.Files, fileResult)
+				result.SuccessCount++
+				result.TotalSize += fileHeader.Size
+				continue
+			}
+
+			// 使用哈希值作为文件名
 			if options.PreserveExtension {
-				ext := filepath.Ext(filename)
+				filename = hashValue + ext
+			} else {
+				filename = hashValue
+			}
+		} else if options.GenerateUniqueName {
+			if options.PreserveExtension {
 				baseFilename := strings.TrimSuffix(filename, ext)
 				filename = generateUniqueFilename(baseFilename) + ext
 			} else {
@@ -363,6 +433,75 @@ func generateUniqueFilename(originalName string) string {
 	io.WriteString(hash, originalName)
 	io.WriteString(hash, fmt.Sprintf("%d", timestamp))
 	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// CalculateFileHash 计算文件的哈希值
+// CalculateFileHash calculates the hash of a file
+// 参数:
+// - file: 文件读取器
+// - algorithm: 哈希算法 ("md5" 或 "sha256")
+// 返回:
+// - 文件哈希值的十六进制字符串
+// - 错误（如果有）
+func CalculateFileHash(file io.Reader, algorithm string) (string, error) {
+	var hash string
+	var err error
+
+	// 重置文件指针到开始位置（如果支持）
+	if seeker, ok := file.(io.Seeker); ok {
+		if _, err = seeker.Seek(0, io.SeekStart); err != nil {
+			return "", fmt.Errorf("重置文件指针失败: %w", err)
+		}
+	}
+
+	switch strings.ToLower(algorithm) {
+	case "md5":
+		hashMd5 := md5.New()
+		if _, err = io.Copy(hashMd5, file); err != nil {
+			return "", fmt.Errorf("计算MD5哈希失败: %w", err)
+		}
+		hash = hex.EncodeToString(hashMd5.Sum(nil))
+	case "sha256", "":
+		hashSha256 := sha256.New()
+		if _, err = io.Copy(hashSha256, file); err != nil {
+			return "", fmt.Errorf("计算SHA-256哈希失败: %w", err)
+		}
+		hash = hex.EncodeToString(hashSha256.Sum(nil))
+	default:
+		return "", fmt.Errorf("不支持的哈希算法: %s", algorithm)
+	}
+
+	// 再次重置文件指针（如果支持）
+	if seeker, ok := file.(io.Seeker); ok {
+		if _, err = seeker.Seek(0, io.SeekStart); err != nil {
+			return hash, fmt.Errorf("重置文件指针失败（哈希值已计算）: %w", err)
+		}
+	}
+
+	return hash, nil
+}
+
+// CheckFileHashExists 检查具有相同哈希值的文件是否已存在
+// CheckFileHashExists checks if a file with the same hash already exists
+// 参数:
+// - hashValue: 文件哈希值
+// - uploadDir: 上传目录
+// - extension: 文件扩展名（可选）
+// 返回:
+// - 是否存在
+// - 如果存在，返回现有文件路径
+func CheckFileHashExists(hashValue, uploadDir, extension string) (bool, string) {
+	filename := hashValue
+	if extension != "" {
+		filename = hashValue + extension
+	}
+
+	filePath := filepath.Join(uploadDir, filename)
+	if FileExists(filePath) {
+		return true, filePath
+	}
+
+	return false, ""
 }
 
 // GetFileExtension 获取文件扩展名
