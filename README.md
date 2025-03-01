@@ -218,6 +218,57 @@ go get github.com/iwen-conf/utils-pkg
 - 高效的 map 实现去重
 - 并发处理大数据集
 
+### 分页模块 (`pagination/`)
+
+提供高效易用的分页参数处理功能：
+
+#### 核心功能
+
+- 解析和验证分页参数（limit/offset）
+- 自定义分页参数范围
+- 从不同数据源获取分页参数
+- 计算总页数和当前页码
+- 支持自定义参数键名
+
+#### 使用场景
+
+- RESTful API 分页实现
+- 数据列表展示
+- 大数据集分批处理
+- 前端分页组件对接
+
+#### 性能优化
+
+- 参数验证快速失败
+- 合理的默认值设置
+- 高效的页码计算
+- 与 Hertz 框架无缝集成
+
+### 事务管理模块 (`txmanager/`)
+
+提供简单易用的数据库事务管理功能：
+
+#### 核心功能
+
+- 在单个事务中执行多个数据库操作
+- 自动处理事务的提交和回滚
+- 支持自定义事务选项
+- 完善的错误处理和传播机制
+
+#### 使用场景
+
+- 需要原子性操作的数据库更新
+- 复杂的业务逻辑涉及多个数据库操作
+- 需要保证数据一致性的场景
+- 高并发环境下的数据库操作
+
+#### 性能优化
+
+- 精简的事务管理流程
+- 高效的错误处理机制
+- 支持自定义事务隔离级别
+- 资源的及时释放
+
 ## 最佳实践
 
 ### 1. JWT 模块使用建议
@@ -262,6 +313,20 @@ go get github.com/iwen-conf/utils-pkg
 - 使用适当的集合操作
 - 注意内存使用
 - 大数据集考虑并发处理
+
+### 7. 分页模块使用建议
+
+- 根据业务需求设置合适的最大和最小limit值
+- 对于大数据集，建议设置合理的默认limit值
+- 使用自定义键名时确保前后端参数名一致
+- 在处理大量数据时，结合数据库查询优化分页性能
+
+### 8. 事务管理模块使用建议
+
+- 将相关的数据库操作组合在同一事务中执行
+- 事务函数应该尽量简短，避免长时间占用数据库连接
+- 合理使用事务隔离级别，根据业务需求选择适当的隔离级别
+- 避免在事务中执行非数据库操作，如网络请求或文件操作
 
 ## 详细使用示例
 
@@ -472,6 +537,136 @@ func main() {
     }
     fmt.Printf("密码哈希: %s\n", hash)
 }
+```
+
+### 分页模块示例
+
+```go
+package main
+
+import (
+    "fmt"
+    "github.com/cloudwego/hertz/pkg/app"
+    "github.com/cloudwego/hertz/pkg/protocol"
+    "github.com/cloudwego/hertz/pkg/protocol/consts"
+    "github.com/iwen-conf/utils-pkg/pagination"
+)
+
+func main() {
+    // 示例1: 基本的分页参数解析
+    limitStr := "20"
+    offsetStr := "40"
+    limit, offset, err := pagination.ParseLimitOffset(limitStr, offsetStr)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("基本解析 - Limit: %d, Offset: %d\n", limit, offset)
+
+    // 示例2: 自定义范围的分页参数解析
+    minLimit := 5
+    maxLimit := 50
+    limit, offset, err = pagination.ParseLimitOffsetWithRange("15", "30", minLimit, maxLimit)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("自定义范围 - Limit: %d, Offset: %d\n", limit, offset)
+
+    // 示例3: 从map中获取分页参数
+    params := map[string]string{
+        "page_size": "30",
+        "start":     "60",
+    }
+    limit, offset, err = pagination.GetPaginationParams(params, "page_size", "start")
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("从Map获取 - Limit: %d, Offset: %d\n", limit, offset)
+
+    // 示例4: 从Hertz框架的Context中获取分页参数
+    req := protocol.NewRequest(consts.MethodGet, "/test?limit=25&offset=50", nil)
+    c := app.RequestContext{}
+    c.Request = *req
+    limit, offset, err = pagination.GetPaginationParamsFromContext(&c)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("从Context获取 - Limit: %d, Offset: %d\n", limit, offset)
+
+    // 示例5: 计算总页数和当前页码
+    totalItems := 101
+    limit = 10
+    totalPages := pagination.CalculateTotalPages(totalItems, limit)
+    currentPage := pagination.CalculateCurrentPage(offset, limit)
+    fmt.Printf("总页数: %d, 当前页码: %d\n", totalPages, currentPage)
+}
+```
+
+### 事务管理模块示例
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "github.com/iwen-conf/utils-pkg/txmanager"
+    "github.com/jackc/pgx/v5"
+    "github.com/jackc/pgx/v5/pgxpool"
+)
+
+func main() {
+    // 连接到PostgreSQL数据库
+    ctx := context.Background()
+    connString := "postgres://username:password@localhost:5432/dbname"
+    pool, err := pgxpool.New(ctx, connString)
+    if err != nil {
+        panic(err)
+    }
+    defer pool.Close()
+
+    // 创建事务管理器
+    tm := txmanager.NewTxManager(pool)
+
+    // 示例1: 在单个事务中执行多个操作
+    err = tm.RunInTransaction(ctx,
+        // 第一个操作: 创建用户
+        func(ctx context.Context, tx pgx.Tx) error {
+            _, err := tx.Exec(ctx, "INSERT INTO users(name, email) VALUES($1, $2)", "张三", "zhangsan@example.com")
+            return err
+        },
+        // 第二个操作: 创建用户配置
+        func(ctx context.Context, tx pgx.Tx) error {
+            _, err := tx.Exec(ctx, "INSERT INTO user_settings(user_id, theme) VALUES(currval('users_id_seq'), $1)", "default")
+            return err
+        },
+    )
+    if err != nil {
+        fmt.Printf("事务执行失败: %v\n", err)
+    } else {
+        fmt.Println("事务执行成功")
+    }
+
+    // 示例2: 使用自定义事务选项
+    opts := pgx.TxOptions{
+        IsoLevel: pgx.Serializable, // 设置隔离级别为可序列化
+    }
+    err = tm.RunInTransactionWithOptions(ctx, opts,
+        func(ctx context.Context, tx pgx.Tx) error {
+            _, err := tx.Exec(ctx, "UPDATE accounts SET balance = balance - $1 WHERE id = $2", 100, 1)
+            return err
+        },
+        func(ctx context.Context, tx pgx.Tx) error {
+            _, err := tx.Exec(ctx, "UPDATE accounts SET balance = balance + $1 WHERE id = $2", 100, 2)
+            return err
+        },
+    )
+    if err != nil {
+        fmt.Printf("转账事务失败: %v\n", err)
+    } else {
+        fmt.Println("转账事务成功")
+    }
+}
+```
 ```
 
 ### URL 模块示例
