@@ -46,6 +46,148 @@
 - 切片去重：~1,000,000 ops/s
 - 集合运算：~500,000 ops/s
 
+### Date 模块 (`date/`)
+
+提供全面的日期和时间处理功能：
+
+#### 核心功能
+
+- 日期格式化和解析
+- 工作日计算
+- 日期比较和范围判断
+- 年龄计算
+- 时区转换
+- 月份和季度处理
+- 闰年判断
+- 周数和天数计算
+
+#### 使用场景
+
+- 日期格式化显示
+- 工作日和假期计算
+- 年龄计算
+- 日期范围处理
+- 跨时区业务处理
+- 日历应用开发
+- 定时任务调度
+
+#### 性能优化
+
+- 高效的日期计算算法
+- 时间规范化处理
+- 内存优化的日期范围处理
+- 缓存友好的时间比较
+
+#### 使用示例
+
+```go
+package main
+
+import (
+    "fmt"
+    "time"
+    "github.com/iwen-conf/utils-pkg/date"
+)
+
+func main() {
+    // 获取当前日期
+    now := time.Now()
+
+    // 格式化日期
+    formattedDate := date.FormatDate(now, "YYYY-MM-DD")
+    fmt.Printf("格式化日期: %s\n", formattedDate)
+
+    // 格式化日期时间
+    formattedDateTime := date.FormatDateTime(now, "YYYY-MM-DD HH:mm:ss")
+    fmt.Printf("格式化日期时间: %s\n", formattedDateTime)
+
+    // 计算工作日
+    startDate := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+    endDate := time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC)
+    workdays := date.GetWorkdayCount(startDate, endDate)
+    fmt.Printf("工作日数量: %d\n", workdays)
+
+    // 添加工作日
+    futureDate := date.AddWorkdays(now, 5)
+    fmt.Printf("5个工作日后: %s\n", date.FormatDate(futureDate, "YYYY-MM-DD"))
+
+    // 计算年龄
+    birthDate := time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC)
+    age := date.GetAge(birthDate)
+    fmt.Printf("年龄: %d\n", age)
+
+    // 判断闰年
+    year := 2024
+    isLeap := date.IsLeapYear(year)
+    fmt.Printf("%d是闰年: %v\n", year, isLeap)
+
+    // 获取月份第一天和最后一天
+    firstDay := date.GetMonthFirstDay(now)
+    lastDay := date.GetMonthLastDay(now)
+    fmt.Printf("本月第一天: %s\n", date.FormatDate(firstDay, "YYYY-MM-DD"))
+    fmt.Printf("本月最后一天: %s\n", date.FormatDate(lastDay, "YYYY-MM-DD"))
+
+    // 获取季度起止日期
+    quarterFirst := date.GetQuarterFirstDay(now)
+    quarterLast := date.GetQuarterLastDay(now)
+    fmt.Printf("本季度第一天: %s\n", date.FormatDate(quarterFirst, "YYYY-MM-DD"))
+    fmt.Printf("本季度最后一天: %s\n", date.FormatDate(quarterLast, "YYYY-MM-DD"))
+
+    // 判断周末
+    isWeekend := date.IsWeekend(now)
+    fmt.Printf("是否周末: %v\n", isWeekend)
+
+    // 获取指定范围内的特定星期几
+    mondays := date.GetWeekdayInRange(startDate, endDate, 1) // 1 表示周一
+    fmt.Printf("本月的所有周一: %v\n", mondays)
+
+    // 时区转换
+    shanghaiTime, err := date.ConvertTimeZone(now, "Asia/Shanghai")
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("上海时间: %s\n", date.FormatDateTime(shanghaiTime, "YYYY-MM-DD HH:mm:ss"))
+
+    // 日期比较
+    date1 := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+    date2 := time.Date(2024, 3, 2, 0, 0, 0, 0, time.UTC)
+    compareResult := date.CompareDate(date1, date2)
+    fmt.Printf("日期比较结果: %d\n", compareResult) // -1 表示 date1 早于 date2
+
+    // 判断日期范围
+    checkDate := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)
+    inRange := date.IsBetween(checkDate, startDate, endDate)
+    fmt.Printf("日期是否在范围内: %v\n", inRange)
+
+    // 获取年份的第几周
+    weekOfYear := date.GetWeekOfYear(now)
+    fmt.Printf("当前是今年的第 %d 周\n", weekOfYear)
+
+    // 获取年份的第几天
+    dayOfYear := date.GetDayOfYear(now)
+    fmt.Printf("当前是今年的第 %d 天\n", dayOfYear)
+}
+```
+
+#### 注意事项
+
+1. 时间处理
+   - 始终使用 UTC 时间进行存储
+   - 仅在显示时进行时区转换
+   - 注意处理夏令时
+
+2. 日期比较
+   - 使用 `CompareDate` 而不是直接比较
+   - 注意时区影响
+
+3. 工作日计算
+   - 仅考虑周末，不包含节假日
+   - 可以根据需要扩展节假日处理
+
+4. 性能考虑
+   - 对于频繁操作，考虑缓存结果
+   - 大范围日期操作注意内存使用
+
 ## 依赖要求
 
 - Go 1.21 或更高版本
@@ -316,8 +458,8 @@ go get github.com/iwen-conf/utils-pkg
 
 ### 7. 分页模块使用建议
 
-- 根据业务需求设置合适的最大和最小limit值
-- 对于大数据集，建议设置合理的默认limit值
+- 根据业务需求设置合适的最大和最小 limit 值
+- 对于大数据集，建议设置合理的默认 limit 值
 - 使用自定义键名时确保前后端参数名一致
 - 在处理大量数据时，结合数据库查询优化分页性能
 
@@ -666,7 +808,6 @@ func main() {
         fmt.Println("转账事务成功")
     }
 }
-```
 ```
 
 ### URL 模块示例
