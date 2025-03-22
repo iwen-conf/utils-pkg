@@ -81,6 +81,11 @@ func standardizePath(path string) string {
 	// 将所有反斜杠转换为正斜杠
 	path = strings.ReplaceAll(path, "\\", "/")
 
+	// 移除重复的斜杠
+	for strings.Contains(path, "//") {
+		path = strings.ReplaceAll(path, "//", "/")
+	}
+
 	// 使用 filepath.Clean 处理 . 和 .. 路径
 	path = filepath.Clean(path)
 
@@ -90,13 +95,15 @@ func standardizePath(path string) string {
 		path = strings.TrimPrefix(path, "/")
 	}
 
-	// 如果路径以 / 开头，直接返回
-	if strings.HasPrefix(path, "/") {
-		return path
+	// 如果是相对路径，确保以 / 开头
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
 	}
 
-	// 添加前导 /
-	return "/" + path
+	// 确保使用正斜杠
+	path = strings.ReplaceAll(path, "\\", "/")
+
+	return path
 }
 
 // HandleFileUploadWithOptions 使用自定义选项处理文件上传
@@ -183,7 +190,7 @@ func HandleFileUploadWithOptions(c *app.RequestContext, formFieldName, uploadDir
 		// 检查是否存在相同哈希的文件
 		if exists, existingPath := CheckFileHashExists(hashValue, fullUploadDir, ext); exists {
 			// 文件已存在，直接返回现有文件的信息
-			result.FilePath = existingPath
+			result.FilePath = standardizePath(existingPath)
 			result.FileName = filepath.Base(existingPath)
 			result.Uploaded = true
 			return result
@@ -208,13 +215,7 @@ func HandleFileUploadWithOptions(c *app.RequestContext, formFieldName, uploadDir
 	}
 
 	// 准备保存文件
-	filePath := filepath.Join(fullUploadDir, filename)
-
-	// 保存文件使用实际路径
-	savePath := filePath
-
-	// 返回标准化的路径（以/开头）
-	filePath = standardizePath(filePath)
+	savePath := filepath.Join(fullUploadDir, filename)
 
 	// 创建目标文件
 	dst, err := os.Create(savePath)
@@ -230,7 +231,8 @@ func HandleFileUploadWithOptions(c *app.RequestContext, formFieldName, uploadDir
 		return result
 	}
 
-	result.FilePath = filePath
+	// 返回标准化的路径（以/开头）
+	result.FilePath = standardizePath(filepath.Join(uploadDir, options.SubPath, filename))
 	result.FileName = filename
 	result.Uploaded = true
 	return result
@@ -371,7 +373,7 @@ func HandleMultiFileUpload(c *app.RequestContext, formFieldName, uploadDir strin
 			// 检查是否存在相同哈希的文件
 			if exists, existingPath := CheckFileHashExists(hashValue, fullUploadDir, ext); exists {
 				// 文件已存在，直接返回现有文件的信息
-				fileResult.FilePath = existingPath
+				fileResult.FilePath = standardizePath(existingPath)
 				fileResult.FileName = filepath.Base(existingPath)
 				fileResult.Uploaded = true
 				result.Files = append(result.Files, fileResult)
@@ -399,13 +401,7 @@ func HandleMultiFileUpload(c *app.RequestContext, formFieldName, uploadDir strin
 		}
 
 		// 准备保存文件
-		filePath := filepath.Join(fullUploadDir, filename)
-
-		// 保存文件使用实际路径
-		savePath := filePath
-
-		// 返回标准化的路径（以/开头）
-		filePath = standardizePath(filePath)
+		savePath := filepath.Join(fullUploadDir, filename)
 
 		// 保存文件
 		if err := SaveMultipartFile(fileHeader, savePath); err != nil {
@@ -416,7 +412,7 @@ func HandleMultiFileUpload(c *app.RequestContext, formFieldName, uploadDir strin
 		}
 
 		// 更新文件结果
-		fileResult.FilePath = filePath
+		fileResult.FilePath = standardizePath(filepath.Join(uploadDir, options.SubPath, filename))
 		fileResult.FileName = filename
 		fileResult.Uploaded = true
 
