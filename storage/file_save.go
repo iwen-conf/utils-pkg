@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -75,24 +76,27 @@ func HandleFileUpload(c *app.RequestContext, formFieldName, uploadDir string) Up
 	return HandleFileUploadWithOptions(c, formFieldName, uploadDir, DefaultFileUploadOptions())
 }
 
-// standardizePath 标准化路径，移除./和../，确保以/开头
+// standardizePath 标准化路径格式
 func standardizePath(path string) string {
-	// 清理路径中的./和../
+	// 将所有反斜杠转换为正斜杠
+	path = strings.ReplaceAll(path, "\\", "/")
+
+	// 使用 filepath.Clean 处理 . 和 .. 路径
 	path = filepath.Clean(path)
 
-	// 移除开头的./或../
-	path = strings.TrimPrefix(path, ".")
-	path = strings.TrimPrefix(path, "/")
-
-	// 将反斜杠转换为正斜杠
-	path = filepath.ToSlash(path)
-
-	// 确保以/开头
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
+	// 移除开头的 ..
+	for strings.HasPrefix(path, "..") {
+		path = strings.TrimPrefix(path, "..")
+		path = strings.TrimPrefix(path, "/")
 	}
 
-	return path
+	// 如果路径以 / 开头，直接返回
+	if strings.HasPrefix(path, "/") {
+		return path
+	}
+
+	// 添加前导 /
+	return "/" + path
 }
 
 // HandleFileUploadWithOptions 使用自定义选项处理文件上传
@@ -425,29 +429,31 @@ func HandleMultiFileUpload(c *app.RequestContext, formFieldName, uploadDir strin
 	return result
 }
 
-// SaveMultipartFile 保存multipart文件到指定路径
-// SaveMultipartFile saves a multipart file to the specified path
-// 参数:
-// - file: multipart文件
-// - dst: 目标路径
-// 返回:
-// - 错误（如果有）
-func SaveMultipartFile(file *multipart.FileHeader, dst string) error {
+// SaveMultipartFile 保存上传的文件到指定路径
+func SaveMultipartFile(file *multipart.FileHeader, dstPath string) error {
+	if file == nil {
+		return errors.New("multipart file is nil")
+	}
+
 	src, err := file.Open()
 	if err != nil {
 		return fmt.Errorf("打开上传文件失败: %w", err)
 	}
 	defer src.Close()
 
-	out, err := os.Create(dst)
+	// 确保目标目录存在
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+		return fmt.Errorf("创建目标目录失败: %w", err)
+	}
+
+	dst, err := os.Create(dstPath)
 	if err != nil {
 		return fmt.Errorf("创建目标文件失败: %w", err)
 	}
-	defer out.Close()
+	defer dst.Close()
 
-	_, err = io.Copy(out, src)
-	if err != nil {
-		return fmt.Errorf("复制文件内容失败: %w", err)
+	if _, err = io.Copy(dst, src); err != nil {
+		return fmt.Errorf("保存文件失败: %w", err)
 	}
 
 	return nil
