@@ -46,6 +46,7 @@ type FileUploadOptions struct {
 	MaxTotalSize       int64    // 多文件上传时的总大小限制，0表示不限制
 	UseFileHash        bool     // 是否使用文件哈希作为文件名并进行去重
 	HashAlgorithm      string   // 哈希算法，支持"md5"和"sha256"，默认为"sha256"
+	UseAbsolutePath    bool     // 是否返回绝对路径，默认为false
 }
 
 // DefaultFileUploadOptions 返回默认的文件上传选项
@@ -60,6 +61,7 @@ func DefaultFileUploadOptions() FileUploadOptions {
 		MaxTotalSize:       50 * 1024 * 1024, // 默认50MB总大小限制
 		UseFileHash:        false,            // 默认不使用文件哈希去重
 		HashAlgorithm:      "sha256",         // 默认使用SHA-256哈希算法
+		UseAbsolutePath:    false,            // 默认返回相对路径
 	}
 }
 
@@ -185,6 +187,16 @@ func HandleFileUploadWithOptions(c *app.RequestContext, formFieldName, uploadDir
 
 	// 准备保存文件
 	filePath := filepath.Join(fullUploadDir, filename)
+
+	// 如果需要返回绝对路径，转换为绝对路径
+	if options.UseAbsolutePath {
+		absPath, err := filepath.Abs(filePath)
+		if err != nil {
+			result.Error = fmt.Errorf("获取绝对路径失败: %w", err)
+			return result
+		}
+		filePath = absPath
+	}
 
 	// 创建目标文件
 	dst, err := os.Create(filePath)
@@ -370,6 +382,18 @@ func HandleMultiFileUpload(c *app.RequestContext, formFieldName, uploadDir strin
 
 		// 准备保存文件
 		filePath := filepath.Join(fullUploadDir, filename)
+
+		// 如果需要返回绝对路径，转换为绝对路径
+		if options.UseAbsolutePath {
+			absPath, err := filepath.Abs(filePath)
+			if err != nil {
+				fileResult.Error = fmt.Errorf("获取绝对路径失败: %w", err)
+				result.Files = append(result.Files, fileResult)
+				result.FailCount++
+				continue
+			}
+			filePath = absPath
+		}
 
 		// 保存文件
 		if err := SaveMultipartFile(fileHeader, filePath); err != nil {

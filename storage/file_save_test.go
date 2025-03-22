@@ -98,6 +98,37 @@ func TestHandleFileUpload(t *testing.T) {
 			expectedError:  false,
 			expectedUpload: true,
 		},
+		{
+			name:          "绝对路径测试",
+			fileContent:   "绝对路径测试内容",
+			fileName:      "absolute.txt",
+			formFieldName: "file",
+			options: FileUploadOptions{
+				MaxFileSize:        1024 * 1024,
+				AllowedFileTypes:   []string{},
+				GenerateUniqueName: false,
+				PreserveExtension:  true,
+				UseAbsolutePath:    true,
+			},
+			expectedError:  false,
+			expectedUpload: true,
+		},
+		{
+			name:          "绝对路径带子路径测试",
+			fileContent:   "绝对路径带子路径测试内容",
+			fileName:      "absolute_subpath.txt",
+			formFieldName: "file",
+			options: FileUploadOptions{
+				MaxFileSize:        1024 * 1024,
+				AllowedFileTypes:   []string{},
+				GenerateUniqueName: false,
+				PreserveExtension:  true,
+				SubPath:            "absolute/path",
+				UseAbsolutePath:    true,
+			},
+			expectedError:  false,
+			expectedUpload: true,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -135,6 +166,20 @@ func TestHandleFileUpload(t *testing.T) {
 					content, err := os.ReadFile(filePath)
 					assert.Nil(t, err)
 					assert.DeepEqual(t, tc.fileContent, string(content))
+				}
+
+				// 检查返回的路径
+				if tc.options.UseAbsolutePath {
+					// 验证返回的是绝对路径
+					assert.DeepEqual(t, true, filepath.IsAbs(result.FilePath))
+					// 验证路径指向正确的文件
+					assert.DeepEqual(t, true, FileExists(result.FilePath))
+				} else {
+					// 验证返回的是相对路径
+					assert.DeepEqual(t, false, filepath.IsAbs(result.FilePath))
+					// 验证相对路径指向正确的文件
+					absPath := filepath.Join(testDir, tc.name, result.FilePath)
+					assert.DeepEqual(t, true, FileExists(absPath))
 				}
 			}
 		})
@@ -252,6 +297,67 @@ func TestHandleMultiFileUpload(t *testing.T) {
 		// 检查文件是否在子路径中
 		expectedPath := filepath.Join(uploadDir, "custom/path", fileNames[0])
 		assert.DeepEqual(t, true, FileExists(expectedPath))
+	})
+
+	t.Run("绝对路径测试", func(t *testing.T) {
+		// 创建测试上下文
+		formFieldName := "files"
+		uploadDir := filepath.Join(testDir, "absolute_path_test")
+
+		// 创建测试文件数据
+		fileContents := []string{"绝对路径测试内容"}
+		fileNames := []string{"absolute_test.txt"}
+
+		// 创建测试上下文
+		ctx := createMultiTestContext(t, formFieldName, fileNames, fileContents)
+
+		// 设置绝对路径选项
+		options := DefaultFileUploadOptions()
+		options.UseAbsolutePath = true
+
+		// 执行多文件上传
+		result := HandleMultiFileUpload(ctx, formFieldName, uploadDir, options)
+
+		// 验证结果
+		assert.DeepEqual(t, 1, result.SuccessCount)
+		assert.DeepEqual(t, 0, result.FailCount)
+
+		// 检查返回的路径是否为绝对路径
+		assert.DeepEqual(t, true, filepath.IsAbs(result.Files[0].FilePath))
+		// 验证路径指向正确的文件
+		assert.DeepEqual(t, true, FileExists(result.Files[0].FilePath))
+	})
+
+	t.Run("绝对路径带子路径测试", func(t *testing.T) {
+		// 创建测试上下文
+		formFieldName := "files"
+		uploadDir := filepath.Join(testDir, "absolute_subpath_test")
+
+		// 创建测试文件数据
+		fileContents := []string{"绝对路径带子路径测试内容"}
+		fileNames := []string{"absolute_subpath_test.txt"}
+
+		// 创建测试上下文
+		ctx := createMultiTestContext(t, formFieldName, fileNames, fileContents)
+
+		// 设置绝对路径和子路径选项
+		options := DefaultFileUploadOptions()
+		options.UseAbsolutePath = true
+		options.SubPath = "custom/absolute/path"
+
+		// 执行多文件上传
+		result := HandleMultiFileUpload(ctx, formFieldName, uploadDir, options)
+
+		// 验证结果
+		assert.DeepEqual(t, 1, result.SuccessCount)
+		assert.DeepEqual(t, 0, result.FailCount)
+
+		// 检查返回的路径是否为绝对路径
+		assert.DeepEqual(t, true, filepath.IsAbs(result.Files[0].FilePath))
+		// 验证路径指向正确的文件
+		assert.DeepEqual(t, true, FileExists(result.Files[0].FilePath))
+		// 验证路径包含子路径
+		assert.DeepEqual(t, true, strings.Contains(result.Files[0].FilePath, "custom/absolute/path"))
 	})
 }
 
