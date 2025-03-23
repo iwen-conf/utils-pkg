@@ -2,6 +2,8 @@ package jwt
 
 import (
 	"errors"
+	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -53,18 +55,46 @@ func (m *JWTManager) GenerateToken(userID string, extra map[string]interface{}, 
 		expires = customExpires[0]
 	}
 
+	// 添加调试日志
+	log.Printf("为用户 %s 生成令牌，过期时间: %v", userID, expires)
+	if extra != nil {
+		log.Printf("令牌额外信息: %+v", extra)
+	}
+
+	// 确保 extra 是一个新的 map，避免引用相同的内存
+	tokenExtra := make(map[string]interface{})
+	if extra != nil {
+		for k, v := range extra {
+			tokenExtra[k] = v
+		}
+	}
+
+	// 始终添加一个随机的 jti (JWT ID) 来确保每个令牌都是唯一的
+	tokenExtra["jti"] = fmt.Sprintf("%d", time.Now().UnixNano())
+
 	claims := &Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expires)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
+			ID:        tokenExtra["jti"].(string), // 设置唯一的令牌ID
 		},
 		UserID: userID,
-		Extra:  extra,
+		Extra:  tokenExtra,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(m.secretKey)
+	tokenStr, err := token.SignedString(m.secretKey)
+	if err != nil {
+		log.Printf("令牌签名失败: %v", err)
+		return "", err
+	}
+
+	if len(tokenStr) > 10 {
+		log.Printf("已生成令牌: %s...", tokenStr[:10])
+	}
+
+	return tokenStr, nil
 }
 
 // ValidateToken 验证并解析 JWT token
@@ -110,6 +140,10 @@ func (m *JWTManager) AddToBlacklist(tokenStr string, expireAt time.Time) error {
 		return errors.New("令牌不能为空")
 	}
 
+	if len(tokenStr) > 10 {
+		log.Printf("添加令牌到黑名单: %s..., 过期时间: %v", tokenStr[:10], expireAt)
+	}
+
 	m.blacklistLock.Lock()
 	defer m.blacklistLock.Unlock()
 
@@ -122,17 +156,34 @@ func (m *JWTManager) IsBlacklisted(tokenStr string) bool {
 	m.blacklistLock.RLock()
 	defer m.blacklistLock.RUnlock()
 
+	// 显示完整的黑名单内容以便调试
+	log.Printf("当前黑名单包含 %d 个令牌", len(m.blacklist))
+	for token, expireAt := range m.blacklist {
+		if len(token) > 10 {
+			log.Printf("黑名单中的令牌: %s..., 过期时间: %v", token[:10], expireAt)
+		}
+	}
+
 	expireAt, exists := m.blacklist[tokenStr]
 	if !exists {
+		if len(tokenStr) > 10 {
+			log.Printf("令牌不在黑名单中: %s...", tokenStr[:10])
+		}
 		return false
 	}
 
 	// 如果黑名单过期时间已到，从黑名单中移除
 	if time.Now().After(expireAt) {
+		if len(tokenStr) > 10 {
+			log.Printf("令牌在黑名单中但已过期，移除: %s...", tokenStr[:10])
+		}
 		delete(m.blacklist, tokenStr)
 		return false
 	}
 
+	if len(tokenStr) > 10 {
+		log.Printf("令牌在黑名单中: %s..., 将在 %v 过期", tokenStr[:10], expireAt)
+	}
 	return true
 }
 

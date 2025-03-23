@@ -44,7 +44,7 @@ func TestAuthManager_GenerateTokenPair(t *testing.T) {
 	if claims.UserID != userID {
 		t.Errorf("Expected user ID %s, got %s", userID, claims.UserID)
 	}
-	
+
 	if claims.Extra["role"] != "admin" {
 		t.Errorf("Expected role admin, got %v", claims.Extra["role"])
 	}
@@ -154,6 +154,7 @@ func TestAuthManager_GenerateTokenPair_Parallel(t *testing.T) {
 		})
 	}
 }
+
 // TestAuthManager_RefreshAccessToken_Enhanced 增强的刷新令牌测试
 func TestAuthManager_RefreshAccessToken_Enhanced(t *testing.T) {
 	t.Run("测试正常刷新流程", func(t *testing.T) {
@@ -194,16 +195,16 @@ func TestAuthManager_RefreshAccessToken_Enhanced(t *testing.T) {
 
 	t.Run("测试旧刷新令牌不能再次使用", func(t *testing.T) {
 		manager := NewAuthManager("test-secret", time.Hour, 24*time.Hour)
-		
+
 		// 生成初始令牌对
 		initialPair, _ := manager.GenerateTokenPair("123", nil)
-		
+
 		// 第一次刷新
 		_, err := manager.RefreshAccessToken(initialPair.RefreshToken)
 		if err != nil {
 			t.Fatalf("First refresh should succeed: %v", err)
 		}
-		
+
 		// 尝试再次使用同一个刷新令牌
 		_, err = manager.RefreshAccessToken(initialPair.RefreshToken)
 		if err == nil {
@@ -213,12 +214,12 @@ func TestAuthManager_RefreshAccessToken_Enhanced(t *testing.T) {
 
 	t.Run("测试刷新令牌不在存储中", func(t *testing.T) {
 		manager := NewAuthManager("test-secret", time.Hour, 24*time.Hour)
-		
+
 		// 生成令牌对但不保存到存储中
 		tokenStr, _ := manager.jwtManager.GenerateToken("123", map[string]interface{}{
 			"token_type": "refresh",
 		}, manager.refreshExpires)
-		
+
 		// 尝试使用未存储的刷新令牌
 		_, err := manager.RefreshAccessToken(tokenStr)
 		if err == nil {
@@ -228,15 +229,15 @@ func TestAuthManager_RefreshAccessToken_Enhanced(t *testing.T) {
 
 	t.Run("测试刷新令牌中缺少token_type", func(t *testing.T) {
 		manager := NewAuthManager("test-secret", time.Hour, 24*time.Hour)
-		
+
 		// 生成没有token_type的令牌
 		tokenStr, _ := manager.jwtManager.GenerateToken("123", nil, manager.refreshExpires)
-		
+
 		// 手动添加到刷新令牌存储中
 		manager.refreshTokensLock.Lock()
 		manager.refreshTokens[tokenStr] = "123"
 		manager.refreshTokensLock.Unlock()
-		
+
 		// 尝试使用缺少token_type的刷新令牌
 		_, err := manager.RefreshAccessToken(tokenStr)
 		if err == nil {
@@ -247,13 +248,13 @@ func TestAuthManager_RefreshAccessToken_Enhanced(t *testing.T) {
 	t.Run("测试刷新令牌过期", func(t *testing.T) {
 		// 创建一个短期过期的管理器
 		manager := NewAuthManager("test-secret", time.Hour, 1*time.Millisecond)
-		
+
 		// 生成初始令牌对
 		initialPair, _ := manager.GenerateTokenPair("123", nil)
-		
+
 		// 等待令牌过期
 		time.Sleep(10 * time.Millisecond)
-		
+
 		// 尝试使用过期的刷新令牌
 		_, err := manager.RefreshAccessToken(initialPair.RefreshToken)
 		if err == nil {
@@ -263,21 +264,174 @@ func TestAuthManager_RefreshAccessToken_Enhanced(t *testing.T) {
 
 	t.Run("测试Extra为nil的情况", func(t *testing.T) {
 		manager := NewAuthManager("test-secret", time.Hour, 24*time.Hour)
-		
+
 		// 生成一个Extra为nil的令牌，但手动添加token_type
 		tokenStr, _ := manager.jwtManager.GenerateToken("123", map[string]interface{}{
 			"token_type": "refresh",
 		}, manager.refreshExpires)
-		
+
 		// 手动添加到刷新令牌存储中
 		manager.refreshTokensLock.Lock()
 		manager.refreshTokens[tokenStr] = "123"
 		manager.refreshTokensLock.Unlock()
-		
+
 		// 应该能成功刷新
 		_, err := manager.RefreshAccessToken(tokenStr)
 		if err != nil {
 			t.Errorf("Should be able to refresh with minimal Extra data: %v", err)
 		}
 	})
+}
+
+// TestRefreshTokenBlacklistIssue 测试登录后 refresh_token 是否立即被拉黑
+func TestRefreshTokenBlacklistIssue(t *testing.T) {
+	manager := NewAuthManager("test-secret", time.Hour, 24*time.Hour)
+	userID := "123"
+	extra := map[string]interface{}{"role": "admin"}
+
+	// 生成令牌对，模拟用户登录
+	tokenPair, err := manager.GenerateTokenPair(userID, extra)
+	if err != nil {
+		t.Fatalf("生成令牌对失败: %v", err)
+	}
+
+	// 检查 refresh_token 是否已经在黑名单中
+	isBlacklisted := manager.jwtManager.IsBlacklisted(tokenPair.RefreshToken)
+	if isBlacklisted {
+		t.Error("登录后的 refresh_token 不应该在黑名单中，但现在却是")
+	}
+
+	// 验证 refresh_token 是否可以使用
+	_, err = manager.RefreshAccessToken(tokenPair.RefreshToken)
+	if err != nil {
+		t.Errorf("无法使用登录后的 refresh_token: %v", err)
+	}
+}
+
+// TestConsecutiveRefreshes 测试连续多次刷新令牌的场景
+func TestConsecutiveRefreshes(t *testing.T) {
+	manager := NewAuthManager("test-secret", time.Hour, 24*time.Hour)
+	userID := "123"
+	extra := map[string]interface{}{"role": "admin"}
+
+	// 生成初始令牌对
+	initialPair, err := manager.GenerateTokenPair(userID, extra)
+	if err != nil {
+		t.Fatalf("生成初始令牌对失败: %v", err)
+	}
+
+	// 保存初始刷新令牌，以便后续测试
+	initialRefreshToken := initialPair.RefreshToken
+
+	// 检查初始刷新令牌是否在黑名单中
+	if manager.jwtManager.IsBlacklisted(initialRefreshToken) {
+		t.Error("登录后的 refresh_token 不应该在黑名单中，但它在")
+	} else {
+		t.Log("登录后的 refresh_token 正确地不在黑名单中")
+	}
+
+	// 第一次刷新
+	firstRefresh, err := manager.RefreshAccessToken(initialRefreshToken)
+	if err != nil {
+		t.Fatalf("第一次刷新失败: %v", err)
+	} else {
+		t.Log("第一次刷新成功")
+	}
+
+	// 验证初始刷新令牌已经不能再使用
+	if manager.jwtManager.IsBlacklisted(initialRefreshToken) {
+		t.Log("初始刷新令牌已正确地加入黑名单")
+	} else {
+		t.Error("初始刷新令牌应该在黑名单中，但它不在")
+	}
+
+	_, err = manager.RefreshAccessToken(initialRefreshToken)
+	if err == nil {
+		t.Error("初始刷新令牌在第一次刷新后仍然可用，这不符合预期")
+	} else {
+		t.Logf("初始刷新令牌正确失效: %v", err)
+	}
+
+	// 检查新生成的刷新令牌是否在黑名单中
+	firstRefreshToken := firstRefresh.RefreshToken
+	if manager.jwtManager.IsBlacklisted(firstRefreshToken) {
+		t.Error("第一次刷新生成的 refresh_token 不应该在黑名单中，但它在")
+	} else {
+		t.Log("第一次刷新生成的 refresh_token 正确地不在黑名单中")
+	}
+
+	// 检查 refreshTokens map 中是否包含新生成的令牌
+	manager.refreshTokensLock.RLock()
+	_, exists := manager.refreshTokens[firstRefreshToken]
+	manager.refreshTokensLock.RUnlock()
+	if !exists {
+		t.Error("第一次刷新生成的 refresh_token 应该在存储中，但它不在")
+	} else {
+		t.Log("第一次刷新生成的 refresh_token 正确地存在于存储中")
+	}
+
+	// 第二次刷新
+	secondRefresh, err := manager.RefreshAccessToken(firstRefreshToken)
+	if err != nil {
+		t.Fatalf("使用第一次刷新后的令牌进行第二次刷新失败: %v", err)
+	} else {
+		t.Log("第二次刷新成功")
+	}
+
+	// 验证第一次生成的刷新令牌已经不能再使用
+	if manager.jwtManager.IsBlacklisted(firstRefreshToken) {
+		t.Log("第一次刷新生成的令牌已正确地加入黑名单")
+	} else {
+		t.Error("第一次刷新生成的令牌应该在黑名单中，但它不在")
+	}
+
+	// 第三次刷新
+	_, err = manager.RefreshAccessToken(secondRefresh.RefreshToken)
+	if err != nil {
+		t.Fatalf("第三次刷新失败: %v", err)
+	} else {
+		t.Log("第三次刷新成功")
+	}
+}
+
+// TestRefreshTokenIdentity 测试刷新令牌的值是否有变化
+func TestRefreshTokenIdentity(t *testing.T) {
+	manager := NewAuthManager("test-secret", time.Hour, 24*time.Hour)
+	userID := "123"
+	extra := map[string]interface{}{"role": "admin"}
+
+	// 生成初始令牌对
+	initialPair, _ := manager.GenerateTokenPair(userID, extra)
+	initialRefreshToken := initialPair.RefreshToken
+
+	// 打印前10个字符做比较
+	t.Logf("初始 refresh_token 前缀: %s...", initialRefreshToken[:10])
+
+	// 第一次刷新
+	firstRefresh, _ := manager.RefreshAccessToken(initialRefreshToken)
+	firstRefreshToken := firstRefresh.RefreshToken
+
+	// 打印前10个字符做比较
+	t.Logf("第一次刷新生成的 refresh_token 前缀: %s...", firstRefreshToken[:10])
+
+	// 比较两个令牌是否相同
+	if initialRefreshToken == firstRefreshToken {
+		t.Error("初始 refresh_token 和刷新后的 refresh_token 不应该相同，但它们相同")
+	} else {
+		t.Log("初始 refresh_token 和刷新后的 refresh_token 正确地不同")
+	}
+
+	// 检查旧令牌是否在黑名单中
+	if manager.jwtManager.IsBlacklisted(initialRefreshToken) {
+		t.Log("初始 refresh_token 正确地在黑名单中")
+	} else {
+		t.Error("初始 refresh_token 应该在黑名单中，但它不在")
+	}
+
+	// 检查新令牌是否在黑名单中
+	if manager.jwtManager.IsBlacklisted(firstRefreshToken) {
+		t.Error("刷新后的 refresh_token 不应该在黑名单中，但它在")
+	} else {
+		t.Log("刷新后的 refresh_token 正确地不在黑名单中")
+	}
 }
