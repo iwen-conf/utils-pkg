@@ -17,7 +17,19 @@ type Claims struct {
 	Extra  map[string]interface{} `json:"extra,omitempty"`
 }
 
-// ClaimValidator JWTManager JWT 管理器
+// JWTOptions JWT管理器选项
+type JWTOptions struct {
+	// 是否启用日志
+	EnableLog bool
+}
+
+// DefaultJWTOptions 返回默认的JWT管理器选项
+func DefaultJWTOptions() *JWTOptions {
+	return &JWTOptions{
+		EnableLog: false, // 默认不启用日志
+	}
+}
+
 // ClaimValidator 自定义声明验证器函数类型
 type ClaimValidator func(claims *Claims) error
 
@@ -30,15 +42,35 @@ type JWTManager struct {
 	// token 黑名单
 	blacklist     map[string]time.Time
 	blacklistLock sync.RWMutex
+	// 是否启用日志
+	enableLog bool
 }
 
 // NewJWTManager 创建新的 JWT 管理器
-func NewJWTManager(secretKey string, expires time.Duration) *JWTManager {
+func NewJWTManager(secretKey string, expires time.Duration, options ...*JWTOptions) *JWTManager {
+	opts := DefaultJWTOptions()
+	if len(options) > 0 && options[0] != nil {
+		opts = options[0]
+	}
+
 	return &JWTManager{
 		secretKey:  []byte(secretKey),
 		expires:    expires,
 		validators: make([]ClaimValidator, 0),
 		blacklist:  make(map[string]time.Time),
+		enableLog:  opts.EnableLog,
+	}
+}
+
+// EnableLog 启用日志记录
+func (m *JWTManager) EnableLog(enable bool) {
+	m.enableLog = enable
+}
+
+// logf 内部日志记录函数
+func (m *JWTManager) logf(format string, args ...interface{}) {
+	if m.enableLog {
+		log.Printf(format, args...)
 	}
 }
 
@@ -56,9 +88,9 @@ func (m *JWTManager) GenerateToken(userID string, extra map[string]interface{}, 
 	}
 
 	// 添加调试日志
-	log.Printf("为用户 %s 生成令牌，过期时间: %v", userID, expires)
+	m.logf("为用户 %s 生成令牌，过期时间: %v", userID, expires)
 	if extra != nil {
-		log.Printf("令牌额外信息: %+v", extra)
+		m.logf("令牌额外信息: %+v", extra)
 	}
 
 	// 确保 extra 是一个新的 map，避免引用相同的内存
@@ -84,12 +116,12 @@ func (m *JWTManager) GenerateToken(userID string, extra map[string]interface{}, 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenStr, err := token.SignedString(m.secretKey)
 	if err != nil {
-		log.Printf("令牌签名失败: %v", err)
+		m.logf("令牌签名失败: %v", err)
 		return "", err
 	}
 
 	if len(tokenStr) > 10 {
-		log.Printf("已生成令牌: %s...", tokenStr[:10])
+		m.logf("已生成令牌: %s...", tokenStr[:10])
 	}
 
 	return tokenStr, nil
@@ -139,7 +171,7 @@ func (m *JWTManager) AddToBlacklist(tokenStr string, expireAt time.Time) error {
 	}
 
 	if len(tokenStr) > 10 {
-		log.Printf("添加令牌到黑名单: %s..., 过期时间: %v", tokenStr[:10], expireAt)
+		m.logf("添加令牌到黑名单: %s..., 过期时间: %v", tokenStr[:10], expireAt)
 	}
 
 	m.blacklistLock.Lock()
@@ -154,10 +186,10 @@ func (m *JWTManager) IsBlacklisted(tokenStr string) bool {
 	m.blacklistLock.RLock()
 
 	// 显示完整的黑名单内容以便调试
-	log.Printf("当前黑名单包含 %d 个令牌", len(m.blacklist))
+	m.logf("当前黑名单包含 %d 个令牌", len(m.blacklist))
 	for token, expireAt := range m.blacklist {
 		if len(token) > 10 {
-			log.Printf("黑名单中的令牌: %s..., 过期时间: %v", token[:10], expireAt)
+			m.logf("黑名单中的令牌: %s..., 过期时间: %v", token[:10], expireAt)
 		}
 	}
 
@@ -168,7 +200,7 @@ func (m *JWTManager) IsBlacklisted(tokenStr string) bool {
 
 	if !exists {
 		if len(tokenStr) > 10 {
-			log.Printf("令牌不在黑名单中: %s...", tokenStr[:10])
+			m.logf("令牌不在黑名单中: %s...", tokenStr[:10])
 		}
 		return false
 	}
@@ -176,7 +208,7 @@ func (m *JWTManager) IsBlacklisted(tokenStr string) bool {
 	// 如果黑名单过期时间已到，从黑名单中移除
 	if time.Now().After(expireAt) {
 		if len(tokenStr) > 10 {
-			log.Printf("令牌在黑名单中但已过期，移除: %s...", tokenStr[:10])
+			m.logf("令牌在黑名单中但已过期，移除: %s...", tokenStr[:10])
 		}
 
 		// 获取写锁删除过期条目
@@ -188,7 +220,7 @@ func (m *JWTManager) IsBlacklisted(tokenStr string) bool {
 	}
 
 	if len(tokenStr) > 10 {
-		log.Printf("令牌在黑名单中: %s..., 将在 %v 过期", tokenStr[:10], expireAt)
+		m.logf("令牌在黑名单中: %s..., 将在 %v 过期", tokenStr[:10], expireAt)
 	}
 	return true
 }

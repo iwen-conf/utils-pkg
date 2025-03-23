@@ -435,3 +435,39 @@ func TestRefreshTokenIdentity(t *testing.T) {
 		t.Log("刷新后的 refresh_token 正确地不在黑名单中")
 	}
 }
+
+// TestAuthManager_LogControl 测试日志控制功能
+func TestAuthManager_LogControl(t *testing.T) {
+	// 创建一个默认的Auth管理器（默认禁用日志）
+	manager1 := NewAuthManager("test-secret", time.Hour, 24*time.Hour)
+
+	// 通过选项启用日志的Auth管理器
+	options := DefaultAuthOptions()
+	options.EnableLog = true
+	manager2 := NewAuthManager("test-secret", time.Hour, 24*time.Hour, options)
+
+	// 使用EnableLog方法启用或禁用日志
+	manager3 := NewAuthManager("test-secret", time.Hour, 24*time.Hour)
+	manager3.EnableLog(true)
+
+	// 测试默认值
+	if manager1.enableLog {
+		t.Error("默认应该禁用日志")
+	}
+
+	// 测试通过选项启用日志
+	if !manager2.enableLog {
+		t.Error("使用选项应成功启用日志")
+	}
+
+	// 测试使用方法启用日志
+	if !manager3.enableLog {
+		t.Error("使用EnableLog方法应成功启用日志")
+	}
+
+	// 测试使用方法禁用日志
+	manager3.EnableLog(false)
+	if manager3.enableLog {
+		t.Error("使用EnableLog方法应成功禁用日志")
+	}
+}
