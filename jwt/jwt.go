@@ -17,7 +17,7 @@ type Claims struct {
 	Extra  map[string]interface{} `json:"extra,omitempty"`
 }
 
-// JWTManager JWT 管理器
+// ClaimValidator JWTManager JWT 管理器
 // ClaimValidator 自定义声明验证器函数类型
 type ClaimValidator func(claims *Claims) error
 
@@ -63,10 +63,8 @@ func (m *JWTManager) GenerateToken(userID string, extra map[string]interface{}, 
 
 	// 确保 extra 是一个新的 map，避免引用相同的内存
 	tokenExtra := make(map[string]interface{})
-	if extra != nil {
-		for k, v := range extra {
-			tokenExtra[k] = v
-		}
+	for k, v := range extra {
+		tokenExtra[k] = v
 	}
 
 	// 始终添加一个随机的 jti (JWT ID) 来确保每个令牌都是唯一的
@@ -97,8 +95,13 @@ func (m *JWTManager) GenerateToken(userID string, extra map[string]interface{}, 
 	return tokenStr, nil
 }
 
-// ValidateToken 验证并解析 JWT token
+// ValidateToken 验证 JWT token 的有效性
 func (m *JWTManager) ValidateToken(tokenStr string) (*Claims, error) {
+	// 首先检查是否在黑名单中 - 这样可以避免解析无效令牌
+	if m.IsBlacklisted(tokenStr) {
+		return nil, errors.New("token is blacklisted")
+	}
+
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, errors.New("意外的签名方法")
@@ -108,11 +111,6 @@ func (m *JWTManager) ValidateToken(tokenStr string) (*Claims, error) {
 
 	if err != nil {
 		return nil, err
-	}
-
-	// 检查是否在黑名单中
-	if m.IsBlacklisted(tokenStr) {
-		return nil, errors.New("令牌已被列入黑名单")
 	}
 
 	if claims, ok := token.Claims.(*Claims); ok && token.Valid {
@@ -154,7 +152,6 @@ func (m *JWTManager) AddToBlacklist(tokenStr string, expireAt time.Time) error {
 // IsBlacklisted 检查 token 是否在黑名单中
 func (m *JWTManager) IsBlacklisted(tokenStr string) bool {
 	m.blacklistLock.RLock()
-	defer m.blacklistLock.RUnlock()
 
 	// 显示完整的黑名单内容以便调试
 	log.Printf("当前黑名单包含 %d 个令牌", len(m.blacklist))
@@ -165,6 +162,10 @@ func (m *JWTManager) IsBlacklisted(tokenStr string) bool {
 	}
 
 	expireAt, exists := m.blacklist[tokenStr]
+
+	// 先释放读锁
+	m.blacklistLock.RUnlock()
+
 	if !exists {
 		if len(tokenStr) > 10 {
 			log.Printf("令牌不在黑名单中: %s...", tokenStr[:10])
@@ -177,7 +178,12 @@ func (m *JWTManager) IsBlacklisted(tokenStr string) bool {
 		if len(tokenStr) > 10 {
 			log.Printf("令牌在黑名单中但已过期，移除: %s...", tokenStr[:10])
 		}
+
+		// 获取写锁删除过期条目
+		m.blacklistLock.Lock()
 		delete(m.blacklist, tokenStr)
+		m.blacklistLock.Unlock()
+
 		return false
 	}
 
