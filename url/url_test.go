@@ -118,17 +118,26 @@ func TestValidateSignature(t *testing.T) {
 
 	// 测试无效密钥
 	valid, err = ValidateSignature(url, "wrong-secret", 3600)
-	if err != nil {
-		t.Errorf("Validation failed: %v", err)
+	if err == nil || err != ErrInvalidSignature {
+		t.Errorf("Expected invalid signature error, got: %v", err)
 	}
 	if valid {
 		t.Error("Expected signature to be invalid with wrong secret")
 	}
 
 	// 测试过期 URL
-	valid, err = ValidateSignature(url, "secret", -1)
-	if err == nil {
-		t.Error("Expected error for expired URL")
+	oldURL, err := NewURLBuilder("https://example.com", "secret").
+		SetTimestamp(time.Now().Unix()-7200). // 2小时前
+		AddParam("key1", "value1").
+		Build()
+
+	if err != nil {
+		t.Fatalf("Build expired URL failed: %v", err)
+	}
+
+	valid, err = ValidateSignature(oldURL, "secret", 3600)
+	if err == nil || err != ErrExpiredURL {
+		t.Errorf("Expected expired URL error, got: %v", err)
 	}
 	if valid {
 		t.Error("Expected signature to be invalid for expired URL")
@@ -160,9 +169,9 @@ func TestParseURL(t *testing.T) {
 
 func TestSerializeParams(t *testing.T) {
 	params := map[string]interface{}{
-		"string":     "value",
+		"string":      "value",
 		"stringSlice": []string{"value1", "value2"},
-		"object":     map[string]string{"key": "value"},
+		"object":      map[string]string{"key": "value"},
 	}
 
 	result := SerializeParams(params)
@@ -187,7 +196,10 @@ func TestSerializeParams(t *testing.T) {
 
 func TestDeserializeParams(t *testing.T) {
 	queryString := "key1=value1&key2=value2&array=item1&array=item2"
-	result := DeserializeParams(queryString)
+	result, err := DeserializeParams(queryString)
+	if err != nil {
+		t.Fatalf("DeserializeParams failed: %v", err)
+	}
 
 	// 测试单值参数
 	if result["key1"] != "value1" || result["key2"] != "value2" {
@@ -203,7 +215,10 @@ func TestDeserializeParams(t *testing.T) {
 	}
 
 	// 测试空查询字符串
-	emptyResult := DeserializeParams("")
+	emptyResult, err := DeserializeParams("")
+	if err != nil {
+		t.Fatalf("DeserializeParams failed for empty string: %v", err)
+	}
 	if len(emptyResult) != 0 {
 		t.Error("Empty query string should return empty map")
 	}
@@ -260,9 +275,9 @@ func BenchmarkParseURL(b *testing.B) {
 
 func BenchmarkSerializeParams(b *testing.B) {
 	params := map[string]interface{}{
-		"string":     "value",
+		"string":      "value",
 		"stringSlice": []string{"value1", "value2"},
-		"object":     map[string]string{"key": "value"},
+		"object":      map[string]string{"key": "value"},
 	}
 
 	b.ResetTimer()
@@ -276,6 +291,9 @@ func BenchmarkDeserializeParams(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		DeserializeParams(queryString)
+		_, err := DeserializeParams(queryString)
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 }
