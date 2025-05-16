@@ -16,14 +16,14 @@ import (
 
 // 预定义错误类型
 var (
-	ErrInvalidBaseURL   = errors.New("invalid base URL")
-	ErrMissingTimestamp = errors.New("missing timestamp parameter")
-	ErrMissingSignature = errors.New("missing signature parameter")
-	ErrInvalidTimestamp = errors.New("invalid timestamp format")
-	ErrExpiredURL       = errors.New("URL has expired")
-	ErrFutureTimestamp  = errors.New("timestamp is in the future")
-	ErrInvalidSignature = errors.New("invalid signature")
-	ErrEmptySecretKey   = errors.New("empty secret key")
+	ErrInvalidBaseURL   = errors.New("无效的基础URL")
+	ErrMissingTimestamp = errors.New("缺少时间戳参数")
+	ErrMissingSignature = errors.New("缺少签名参数")
+	ErrInvalidTimestamp = errors.New("无效的时间戳格式")
+	ErrExpiredURL       = errors.New("URL已过期")
+	ErrFutureTimestamp  = errors.New("时间戳日期在未来")
+	ErrInvalidSignature = errors.New("无效的签名")
+	ErrEmptySecretKey   = errors.New("密钥不能为空")
 )
 
 // 时间戳允许的时钟漂移（秒）
@@ -126,7 +126,7 @@ func (b *URLBuilder) Build() (string, error) {
 
 	baseURL, err := url.Parse(b.baseURL)
 	if err != nil {
-		return "", fmt.Errorf("invalid base URL: %w", err)
+		return "", fmt.Errorf("无效的基础URL: %w", err)
 	}
 
 	// 预估URL长度
@@ -264,7 +264,7 @@ func ValidateSignature(rawURL string, secretKey string, maxAgeSeconds int64) (bo
 
 	parsedURL, err := url.Parse(rawURL)
 	if err != nil {
-		return false, fmt.Errorf("invalid URL: %w", err)
+		return false, fmt.Errorf("无效的URL: %w", err)
 	}
 
 	// 获取查询参数
@@ -280,7 +280,7 @@ func ValidateSignature(rawURL string, secretKey string, maxAgeSeconds int64) (bo
 		var err error
 		expiration, err = strconv.ParseInt(exp, 10, 64)
 		if err != nil {
-			return false, fmt.Errorf("invalid expiration: %w", err)
+			return false, fmt.Errorf("无效的过期时间: %w", err)
 		}
 	}
 
@@ -354,7 +354,7 @@ func DeserializeParams(queryString string) (map[string]interface{}, error) {
 
 	values, err := url.ParseQuery(queryString)
 	if err != nil {
-		return nil, fmt.Errorf("invalid query string: %w", err)
+		return nil, fmt.Errorf("无效的查询字符串: %w", err)
 	}
 
 	for k, v := range values {
