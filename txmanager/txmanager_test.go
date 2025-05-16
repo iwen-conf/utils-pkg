@@ -8,7 +8,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -68,66 +67,6 @@ func (m *mockTx) Conn() *pgx.Conn {
 
 func (m *mockTx) Prepare(ctx context.Context, name, sql string) (*pgconn.StatementDescription, error) {
 	return &pgconn.StatementDescription{}, nil
-}
-
-// 模拟数据库连接池
-type mockPool struct {
-	mockTx   *mockTx
-	beginErr error
-}
-
-func (m *mockPool) Begin(ctx context.Context) (pgx.Tx, error) {
-	if m.beginErr != nil {
-		return nil, m.beginErr
-	}
-	return m.mockTx, nil
-}
-
-func (m *mockPool) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) {
-	if m.beginErr != nil {
-		return nil, m.beginErr
-	}
-	return m.mockTx, nil
-}
-
-func (m *mockPool) Close() {}
-
-func (m *mockPool) Acquire(ctx context.Context) (*pgxpool.Conn, error) {
-	return nil, nil
-}
-
-func (m *mockPool) AcquireAllIdle(ctx context.Context) []*pgxpool.Conn {
-	return nil
-}
-
-func (m *mockPool) AcquireFunc(ctx context.Context, f func(*pgxpool.Conn) error) error {
-	return nil
-}
-
-func (m *mockPool) Config() *pgxpool.Config {
-	return nil
-}
-
-func (m *mockPool) Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error) {
-	return pgconn.CommandTag{}, nil
-}
-
-func (m *mockPool) Ping(ctx context.Context) error {
-	return nil
-}
-
-func (m *mockPool) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	return nil, nil
-}
-
-func (m *mockPool) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	return nil
-}
-
-func (m *mockPool) Reset() {}
-
-func (m *mockPool) Stat() *pgxpool.Stat {
-	return nil
 }
 
 // 模拟Logger接口

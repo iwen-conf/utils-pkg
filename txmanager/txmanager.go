@@ -101,7 +101,21 @@ func withActiveTx(ctx context.Context, tx pgx.Tx) context.Context {
 // 记录错误
 func (tm *TxManager) logError(ctx context.Context, msg string, err error, additionalFields ...interface{}) {
 	if tm.logger != nil {
-		fields := append([]interface{}{"error", err}, additionalFields...)
+		// 添加上下文中的信息（如果有）
+		fields := []interface{}{"error", err}
+
+		// 如果上下文包含日志记录器，可以使用它
+		if ctx != nil {
+			if logger, ok := ctx.Value(LoggerKey).(Logger); ok && logger != nil {
+				fields = append(fields, "context_logger", "present")
+			}
+		}
+
+		// 添加其他字段
+		if len(additionalFields) > 0 {
+			fields = append(fields, additionalFields...)
+		}
+
 		tm.logger.Error(msg, fields...)
 	}
 }
@@ -109,14 +123,36 @@ func (tm *TxManager) logError(ctx context.Context, msg string, err error, additi
 // 记录信息
 func (tm *TxManager) logInfo(ctx context.Context, msg string, fields ...interface{}) {
 	if tm.logger != nil {
-		tm.logger.Info(msg, fields...)
+		// 添加上下文中的信息（如果有）
+		extraFields := []interface{}{}
+
+		// 如果上下文包含日志记录器，可以使用它
+		if ctx != nil {
+			if logger, ok := ctx.Value(LoggerKey).(Logger); ok && logger != nil {
+				extraFields = append(extraFields, "context_logger", "present")
+			}
+		}
+
+		allFields := append(extraFields, fields...)
+		tm.logger.Info(msg, allFields...)
 	}
 }
 
 // 记录调试信息
 func (tm *TxManager) logDebug(ctx context.Context, msg string, fields ...interface{}) {
 	if tm.logger != nil {
-		tm.logger.Debug(msg, fields...)
+		// 添加上下文中的信息（如果有）
+		extraFields := []interface{}{}
+
+		// 如果上下文包含日志记录器，可以使用它
+		if ctx != nil {
+			if logger, ok := ctx.Value(LoggerKey).(Logger); ok && logger != nil {
+				extraFields = append(extraFields, "context_logger", "present")
+			}
+		}
+
+		allFields := append(extraFields, fields...)
+		tm.logger.Debug(msg, allFields...)
 	}
 }
 
@@ -330,8 +366,9 @@ func (b *TxBuilder) WithRetryBackoff(backoff time.Duration) *TxBuilder {
 
 // WithTimeout 设置超时时间
 func (b *TxBuilder) WithTimeout(timeout time.Duration) *TxBuilder {
-	ctx, _ := context.WithTimeout(b.ctx, timeout)
-	b.ctx = ctx
+	ctx, cancel := context.WithTimeout(b.ctx, timeout)
+	// 将cancel函数保存到上下文中，以便后续调用
+	b.ctx = context.WithValue(ctx, contextKey("cancel_func"), cancel)
 	return b
 }
 
@@ -343,6 +380,11 @@ func (b *TxBuilder) AddFunc(txFunc TxFunc) *TxBuilder {
 
 // Run 执行事务
 func (b *TxBuilder) Run(txFuncs ...TxFunc) error {
+	// 调用之前保存的cancel函数(如果有)
+	if cancel, ok := b.ctx.Value(contextKey("cancel_func")).(context.CancelFunc); ok && cancel != nil {
+		defer cancel()
+	}
+
 	allFuncs := append(b.txFuncs, txFuncs...)
 
 	if b.options.MaxRetries > 0 {

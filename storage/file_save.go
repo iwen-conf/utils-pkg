@@ -1,19 +1,48 @@
 package storage
 
 import (
+	"bytes"
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"mime/multipart"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
+)
+
+const (
+	// 默认读取缓冲区大小
+	defaultBufferSize = 32 * 1024 // 32KB
+)
+
+// 全局缓冲区池用于减少内存分配
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return bytes.NewBuffer(make([]byte, 0, defaultBufferSize))
+	},
+}
+
+// 全局字节切片池用于读取操作
+var byteSlicePool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, defaultBufferSize)
+		return &b
+	},
+}
+
+// 预编译的正则表达式用于文件类型检测
+var (
+	imageTypeRegex = regexp.MustCompile(`^image/`)
 )
 
 // UploadFileResult 包含文件上传操作的结果
@@ -47,20 +76,26 @@ type FileUploadOptions struct {
 	MaxTotalSize       int64    // 多文件上传时的总大小限制，0表示不限制
 	UseFileHash        bool     // 是否使用文件哈希作为文件名并进行去重
 	HashAlgorithm      string   // 哈希算法，支持"md5"和"sha256"，默认为"sha256"
+	ConcurrentUploads  bool     // 是否使用并发上传多个文件
+	UseAtomicWrites    bool     // 是否使用原子写入（通过临时文件）
+	BufferSize         int      // 读写操作的缓冲区大小
 }
 
 // DefaultFileUploadOptions 返回默认的文件上传选项
 // DefaultFileUploadOptions returns default file upload options
 func DefaultFileUploadOptions() FileUploadOptions {
 	return FileUploadOptions{
-		MaxFileSize:        10 * 1024 * 1024, // 默认10MB
-		AllowedFileTypes:   []string{},       // 默认不限制文件类型
-		GenerateUniqueName: false,            // 默认不生成唯一文件名
-		PreserveExtension:  true,             // 默认保留文件扩展名
-		SubPath:            "",               // 默认不使用子路径
-		MaxTotalSize:       50 * 1024 * 1024, // 默认50MB总大小限制
-		UseFileHash:        false,            // 默认不使用文件哈希去重
-		HashAlgorithm:      "sha256",         // 默认使用SHA-256哈希算法
+		MaxFileSize:        10 * 1024 * 1024,  // 默认10MB
+		AllowedFileTypes:   []string{},        // 默认不限制文件类型
+		GenerateUniqueName: false,             // 默认不生成唯一文件名
+		PreserveExtension:  true,              // 默认保留文件扩展名
+		SubPath:            "",                // 默认不使用子路径
+		MaxTotalSize:       50 * 1024 * 1024,  // 默认50MB总大小限制
+		UseFileHash:        false,             // 默认不使用文件哈希去重
+		HashAlgorithm:      "sha256",          // 默认使用SHA-256哈希算法
+		ConcurrentUploads:  true,              // 默认使用并发上传
+		UseAtomicWrites:    true,              // 默认使用原子写入
+		BufferSize:         defaultBufferSize, // 默认缓冲区大小
 	}
 }
 
@@ -106,6 +141,19 @@ func standardizePath(path string) string {
 	return path
 }
 
+// newHasher 根据算法名称创建相应的哈希函数
+func newHasher(algorithm string) hash.Hash {
+	switch strings.ToLower(algorithm) {
+	case "md5":
+		return md5.New()
+	case "sha256", "":
+		return sha256.New()
+	default:
+		// 默认使用SHA-256
+		return sha256.New()
+	}
+}
+
 // HandleFileUploadWithOptions 使用自定义选项处理文件上传
 // HandleFileUploadWithOptions handles file upload with custom options
 // 参数:
@@ -118,6 +166,11 @@ func standardizePath(path string) string {
 func HandleFileUploadWithOptions(c *app.RequestContext, formFieldName, uploadDir string, options FileUploadOptions) UploadFileResult {
 	result := UploadFileResult{
 		Uploaded: false,
+	}
+
+	// 确保缓冲区大小有效
+	if options.BufferSize <= 0 {
+		options.BufferSize = defaultBufferSize
 	}
 
 	// 准备完整的上传路径（包括子路径）
@@ -180,8 +233,15 @@ func HandleFileUploadWithOptions(c *app.RequestContext, formFieldName, uploadDir
 
 	// 如果启用了文件哈希
 	if options.UseFileHash {
+		// 重置文件指针到开始位置
+		if _, err = file.Seek(0, io.SeekStart); err != nil {
+			result.Error = fmt.Errorf("重置文件指针失败: %w", err)
+			return result
+		}
+
 		// 计算文件哈希
-		hashValue, err := CalculateFileHash(file, options.HashAlgorithm)
+		h := newHasher(options.HashAlgorithm)
+		hashValue, err := calculateStreamHash(file, h, options.BufferSize)
 		if err != nil {
 			result.Error = fmt.Errorf("计算文件哈希失败: %w", err)
 			return result
@@ -216,19 +276,51 @@ func HandleFileUploadWithOptions(c *app.RequestContext, formFieldName, uploadDir
 
 	// 准备保存文件
 	savePath := filepath.Join(fullUploadDir, filename)
+	tempPath := ""
+
+	// 如果使用原子写入，创建临时文件
+	if options.UseAtomicWrites {
+		tempPath = savePath + ".tmp"
+	} else {
+		tempPath = savePath
+	}
+
+	// 重置文件指针到开始位置
+	if _, err = file.Seek(0, io.SeekStart); err != nil {
+		result.Error = fmt.Errorf("重置文件指针失败: %w", err)
+		return result
+	}
 
 	// 创建目标文件
-	dst, err := os.Create(savePath)
+	dst, err := os.Create(tempPath)
 	if err != nil {
 		result.Error = fmt.Errorf("创建文件失败: %w", err)
 		return result
 	}
-	defer dst.Close()
+
+	// 获取缓冲区从池中
+	buffer := byteSlicePool.Get().(*[]byte)
+	defer byteSlicePool.Put(buffer)
 
 	// 复制文件内容
-	if _, err = io.Copy(dst, file); err != nil {
+	_, err = io.CopyBuffer(dst, file, *buffer)
+	dst.Close() // 确保文件立即关闭
+
+	if err != nil {
+		// 删除临时文件
+		os.Remove(tempPath)
 		result.Error = fmt.Errorf("保存文件失败: %w", err)
 		return result
+	}
+
+	// 如果使用原子写入，重命名临时文件到最终文件名
+	if options.UseAtomicWrites && tempPath != savePath {
+		if err := os.Rename(tempPath, savePath); err != nil {
+			// 删除临时文件
+			os.Remove(tempPath)
+			result.Error = fmt.Errorf("文件重命名失败: %w", err)
+			return result
+		}
 	}
 
 	// 返回标准化的路径（以/开头）
@@ -236,6 +328,33 @@ func HandleFileUploadWithOptions(c *app.RequestContext, formFieldName, uploadDir
 	result.FileName = filename
 	result.Uploaded = true
 	return result
+}
+
+// calculateStreamHash 以流式方式计算哈希，减少内存使用
+func calculateStreamHash(reader io.Reader, hasher hash.Hash, bufferSize int) (string, error) {
+	// 获取缓冲区从池中
+	buffer := byteSlicePool.Get().(*[]byte)
+	defer byteSlicePool.Put(buffer)
+
+	// 如果提供的缓冲区大小与池中的不匹配，创建新的缓冲区
+	if len(*buffer) != bufferSize {
+		*buffer = make([]byte, bufferSize)
+	}
+
+	for {
+		n, err := reader.Read(*buffer)
+		if n > 0 {
+			hasher.Write((*buffer)[:n])
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 // HandleMultiFileUpload 处理多文件上传
@@ -311,118 +430,191 @@ func HandleMultiFileUpload(c *app.RequestContext, formFieldName, uploadDir strin
 		return result
 	}
 
-	// 处理每个文件
-	for _, fileHeader := range files {
-		fileResult := UploadFileResult{
-			Uploaded:    false,
-			FileName:    fileHeader.Filename,
-			FileSize:    fileHeader.Size,
-			ContentType: fileHeader.Header.Get("Content-Type"),
+	// 如果启用并发上传
+	if options.ConcurrentUploads && len(files) > 1 {
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		resultChan := make(chan UploadFileResult, len(files))
+
+		// 并发处理每个文件
+		for _, fileHeader := range files {
+			wg.Add(1)
+			go func(fh *multipart.FileHeader) {
+				defer wg.Done()
+				fileResult := processMultipartFile(fh, fullUploadDir, uploadDir, options)
+				resultChan <- fileResult
+			}(fileHeader)
 		}
 
-		// 检查单个文件大小
-		if options.MaxFileSize > 0 && fileHeader.Size > options.MaxFileSize {
-			fileResult.Error = fmt.Errorf("文件过大: %d 字节, 最大允许: %d 字节", fileHeader.Size, options.MaxFileSize)
+		// 等待所有上传完成，并收集结果
+		go func() {
+			wg.Wait()
+			close(resultChan)
+		}()
+
+		// 处理结果
+		for fileResult := range resultChan {
+			mu.Lock()
 			result.Files = append(result.Files, fileResult)
-			result.FailCount++
-			continue
-		}
-
-		// 检查文件类型
-		if len(options.AllowedFileTypes) > 0 {
-			fileTypeAllowed := false
-			for _, allowedType := range options.AllowedFileTypes {
-				if strings.HasPrefix(fileResult.ContentType, allowedType) {
-					fileTypeAllowed = true
-					break
-				}
-			}
-			if !fileTypeAllowed {
-				fileResult.Error = fmt.Errorf("不支持的文件类型: %s", fileResult.ContentType)
-				result.Files = append(result.Files, fileResult)
-				result.FailCount++
-				continue
-			}
-		}
-
-		// 准备文件名
-		filename := fileHeader.Filename
-		ext := filepath.Ext(filename)
-
-		// 如果启用了文件哈希
-		if options.UseFileHash {
-			// 打开文件以计算哈希
-			file, err := fileHeader.Open()
-			if err != nil {
-				fileResult.Error = fmt.Errorf("打开上传文件失败: %w", err)
-				result.Files = append(result.Files, fileResult)
-				result.FailCount++
-				continue
-			}
-			defer file.Close()
-
-			// 计算文件哈希
-			hashValue, err := CalculateFileHash(file, options.HashAlgorithm)
-			if err != nil {
-				fileResult.Error = fmt.Errorf("计算文件哈希失败: %w", err)
-				result.Files = append(result.Files, fileResult)
-				result.FailCount++
-				continue
-			}
-
-			// 检查是否存在相同哈希的文件
-			if exists, existingPath := CheckFileHashExists(hashValue, fullUploadDir, ext); exists {
-				// 文件已存在，直接返回现有文件的信息
-				fileResult.FilePath = standardizePath(existingPath)
-				fileResult.FileName = filepath.Base(existingPath)
-				fileResult.Uploaded = true
-				result.Files = append(result.Files, fileResult)
+			if fileResult.Uploaded {
 				result.SuccessCount++
-				result.TotalSize += fileHeader.Size
-				continue
-			}
-
-			// 使用哈希值作为文件名
-			if options.PreserveExtension {
-				filename = hashValue + ext
+				result.TotalSize += fileResult.FileSize
 			} else {
-				filename = hashValue
+				result.FailCount++
 			}
-		} else if options.GenerateUniqueName {
-			if options.PreserveExtension {
-				baseFilename := strings.TrimSuffix(filename, ext)
-				filename = generateUniqueFilename(baseFilename) + ext
-			} else {
-				filename = generateUniqueFilename(filename)
-			}
-		} else {
-			// 确保文件名安全
-			filename = GetSafeFilename(filename)
+			mu.Unlock()
 		}
-
-		// 准备保存文件
-		savePath := filepath.Join(fullUploadDir, filename)
-
-		// 保存文件
-		if err := SaveMultipartFile(fileHeader, savePath); err != nil {
-			fileResult.Error = fmt.Errorf("保存文件失败: %w", err)
+	} else {
+		// 顺序处理每个文件
+		for _, fileHeader := range files {
+			fileResult := processMultipartFile(fileHeader, fullUploadDir, uploadDir, options)
 			result.Files = append(result.Files, fileResult)
-			result.FailCount++
-			continue
+			if fileResult.Uploaded {
+				result.SuccessCount++
+				result.TotalSize += fileResult.FileSize
+			} else {
+				result.FailCount++
+			}
 		}
-
-		// 更新文件结果
-		fileResult.FilePath = standardizePath(filepath.Join(uploadDir, options.SubPath, filename))
-		fileResult.FileName = filename
-		fileResult.Uploaded = true
-
-		// 添加到结果列表
-		result.Files = append(result.Files, fileResult)
-		result.SuccessCount++
-		result.TotalSize += fileHeader.Size
 	}
 
 	return result
+}
+
+// processMultipartFile 处理单个多部分表单文件
+func processMultipartFile(fileHeader *multipart.FileHeader, fullUploadDir, uploadDir string, options FileUploadOptions) UploadFileResult {
+	fileResult := UploadFileResult{
+		Uploaded:    false,
+		FileName:    fileHeader.Filename,
+		FileSize:    fileHeader.Size,
+		ContentType: fileHeader.Header.Get("Content-Type"),
+	}
+
+	// 检查单个文件大小
+	if options.MaxFileSize > 0 && fileHeader.Size > options.MaxFileSize {
+		fileResult.Error = fmt.Errorf("文件过大: %d 字节, 最大允许: %d 字节", fileHeader.Size, options.MaxFileSize)
+		return fileResult
+	}
+
+	// 检查文件类型
+	if len(options.AllowedFileTypes) > 0 {
+		fileTypeAllowed := false
+		for _, allowedType := range options.AllowedFileTypes {
+			if strings.HasPrefix(fileResult.ContentType, allowedType) {
+				fileTypeAllowed = true
+				break
+			}
+		}
+		if !fileTypeAllowed {
+			fileResult.Error = fmt.Errorf("不支持的文件类型: %s", fileResult.ContentType)
+			return fileResult
+		}
+	}
+
+	// 打开文件
+	file, err := fileHeader.Open()
+	if err != nil {
+		fileResult.Error = fmt.Errorf("打开上传文件失败: %w", err)
+		return fileResult
+	}
+	defer file.Close()
+
+	// 准备文件名
+	filename := fileHeader.Filename
+	ext := filepath.Ext(filename)
+
+	// 如果启用了文件哈希
+	if options.UseFileHash {
+		// 计算文件哈希
+		h := newHasher(options.HashAlgorithm)
+		hashValue, err := calculateStreamHash(file, h, options.BufferSize)
+		if err != nil {
+			fileResult.Error = fmt.Errorf("计算文件哈希失败: %w", err)
+			return fileResult
+		}
+
+		// 检查是否存在相同哈希的文件
+		if exists, existingPath := CheckFileHashExists(hashValue, fullUploadDir, ext); exists {
+			// 文件已存在，直接返回现有文件的信息
+			fileResult.FilePath = standardizePath(existingPath)
+			fileResult.FileName = filepath.Base(existingPath)
+			fileResult.Uploaded = true
+			return fileResult
+		}
+
+		// 使用哈希值作为文件名
+		if options.PreserveExtension {
+			filename = hashValue + ext
+		} else {
+			filename = hashValue
+		}
+	} else if options.GenerateUniqueName {
+		if options.PreserveExtension {
+			baseFilename := strings.TrimSuffix(filename, ext)
+			filename = generateUniqueFilename(baseFilename) + ext
+		} else {
+			filename = generateUniqueFilename(filename)
+		}
+	} else {
+		// 确保文件名安全
+		filename = GetSafeFilename(filename)
+	}
+
+	// 准备保存文件
+	savePath := filepath.Join(fullUploadDir, filename)
+	tempPath := ""
+
+	// 如果使用原子写入，创建临时文件
+	if options.UseAtomicWrites {
+		tempPath = savePath + ".tmp"
+	} else {
+		tempPath = savePath
+	}
+
+	// 重置文件指针到开始位置
+	if _, err = file.Seek(0, io.SeekStart); err != nil {
+		fileResult.Error = fmt.Errorf("重置文件指针失败: %w", err)
+		return fileResult
+	}
+
+	// 创建目标文件
+	dst, err := os.Create(tempPath)
+	if err != nil {
+		fileResult.Error = fmt.Errorf("创建目标文件失败: %w", err)
+		return fileResult
+	}
+
+	// 获取缓冲区从池中
+	buffer := byteSlicePool.Get().(*[]byte)
+	defer byteSlicePool.Put(buffer)
+
+	// 复制文件内容
+	_, err = io.CopyBuffer(dst, file, *buffer)
+	dst.Close()
+
+	if err != nil {
+		// 删除临时文件
+		os.Remove(tempPath)
+		fileResult.Error = fmt.Errorf("保存文件失败: %w", err)
+		return fileResult
+	}
+
+	// 如果使用原子写入，重命名临时文件到最终文件名
+	if options.UseAtomicWrites && tempPath != savePath {
+		if err := os.Rename(tempPath, savePath); err != nil {
+			// 删除临时文件
+			os.Remove(tempPath)
+			fileResult.Error = fmt.Errorf("文件重命名失败: %w", err)
+			return fileResult
+		}
+	}
+
+	// 更新文件结果
+	fileResult.FilePath = standardizePath(filepath.Join(uploadDir, options.SubPath, filename))
+	fileResult.FileName = filename
+	fileResult.Uploaded = true
+
+	return fileResult
 }
 
 // SaveMultipartFile 保存上传的文件到指定路径
@@ -442,14 +634,32 @@ func SaveMultipartFile(file *multipart.FileHeader, dstPath string) error {
 		return fmt.Errorf("创建目标目录失败: %w", err)
 	}
 
-	dst, err := os.Create(dstPath)
+	// 创建临时文件
+	tempPath := dstPath + ".tmp"
+	dst, err := os.Create(tempPath)
 	if err != nil {
 		return fmt.Errorf("创建目标文件失败: %w", err)
 	}
-	defer dst.Close()
 
-	if _, err = io.Copy(dst, src); err != nil {
+	// 获取缓冲区从池中
+	buffer := byteSlicePool.Get().(*[]byte)
+	defer byteSlicePool.Put(buffer)
+
+	// 复制文件内容
+	_, err = io.CopyBuffer(dst, src, *buffer)
+	dst.Close()
+
+	if err != nil {
+		// 删除临时文件
+		os.Remove(tempPath)
 		return fmt.Errorf("保存文件失败: %w", err)
+	}
+
+	// 重命名临时文件到最终文件名
+	if err := os.Rename(tempPath, dstPath); err != nil {
+		// 删除临时文件
+		os.Remove(tempPath)
+		return fmt.Errorf("文件重命名失败: %w", err)
 	}
 
 	return nil
@@ -478,41 +688,29 @@ func generateUniqueFilename(originalName string) string {
 // - 文件哈希值的十六进制字符串
 // - 错误（如果有）
 func CalculateFileHash(file io.Reader, algorithm string) (string, error) {
-	var hash string
-	var err error
-
 	// 重置文件指针到开始位置（如果支持）
 	if seeker, ok := file.(io.Seeker); ok {
-		if _, err = seeker.Seek(0, io.SeekStart); err != nil {
+		if _, err := seeker.Seek(0, io.SeekStart); err != nil {
 			return "", fmt.Errorf("重置文件指针失败: %w", err)
 		}
 	}
 
-	switch strings.ToLower(algorithm) {
-	case "md5":
-		hashMd5 := md5.New()
-		if _, err = io.Copy(hashMd5, file); err != nil {
-			return "", fmt.Errorf("计算MD5哈希失败: %w", err)
-		}
-		hash = hex.EncodeToString(hashMd5.Sum(nil))
-	case "sha256", "":
-		hashSha256 := sha256.New()
-		if _, err = io.Copy(hashSha256, file); err != nil {
-			return "", fmt.Errorf("计算SHA-256哈希失败: %w", err)
-		}
-		hash = hex.EncodeToString(hashSha256.Sum(nil))
-	default:
-		return "", fmt.Errorf("不支持的哈希算法: %s", algorithm)
+	h := newHasher(algorithm)
+
+	// 使用流式计算哈希
+	hashValue, err := calculateStreamHash(file, h, defaultBufferSize)
+	if err != nil {
+		return "", err
 	}
 
 	// 再次重置文件指针（如果支持）
 	if seeker, ok := file.(io.Seeker); ok {
-		if _, err = seeker.Seek(0, io.SeekStart); err != nil {
-			return hash, fmt.Errorf("重置文件指针失败（哈希值已计算）: %w", err)
+		if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+			return hashValue, fmt.Errorf("重置文件指针失败（哈希值已计算）: %w", err)
 		}
 	}
 
-	return hash, nil
+	return hashValue, nil
 }
 
 // CheckFileHashExists 检查具有相同哈希值的文件是否已存在
@@ -555,7 +753,7 @@ func GetFileExtension(filename string) string {
 // 返回:
 // - 是否为图片
 func IsImageFile(contentType string) bool {
-	return strings.HasPrefix(contentType, "image/")
+	return imageTypeRegex.MatchString(contentType)
 }
 
 // GetSafeFilename 获取安全的文件名（移除不安全字符）
