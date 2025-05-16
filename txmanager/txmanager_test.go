@@ -4,36 +4,38 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 // 模拟事务接口
 type mockTx struct {
-	commitCalled   bool
-	rollbackCalled bool
-	commitErr      error
-	rollbackErr    error
+	mock.Mock
 }
 
 func (m *mockTx) Begin(ctx context.Context) (pgx.Tx, error) {
-	return m, nil
+	args := m.Called(ctx)
+	return args.Get(0).(pgx.Tx), args.Error(1)
 }
 
 func (m *mockTx) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) {
-	return m, nil
+	args := m.Called(ctx, txOptions)
+	return args.Get(0).(pgx.Tx), args.Error(1)
 }
 
 func (m *mockTx) Commit(ctx context.Context) error {
-	m.commitCalled = true
-	return m.commitErr
+	args := m.Called(ctx)
+	return args.Error(0)
 }
 
 func (m *mockTx) Rollback(ctx context.Context) error {
-	m.rollbackCalled = true
-	return m.rollbackErr
+	args := m.Called(ctx)
+	return args.Error(0)
 }
 
 func (m *mockTx) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error) {
@@ -70,7 +72,7 @@ func (m *mockTx) Prepare(ctx context.Context, name, sql string) (*pgconn.Stateme
 
 // 模拟数据库连接池
 type mockPool struct {
-	mockTx *mockTx
+	mockTx   *mockTx
 	beginErr error
 }
 
@@ -128,263 +130,289 @@ func (m *mockPool) Stat() *pgxpool.Stat {
 	return nil
 }
 
-func TestRunInTransaction_Success(t *testing.T) {
-	// 创建模拟对象
-	mockTx := &mockTx{}
-	mockDB := &mockPool{mockTx: mockTx}
-	txManager := NewTxManager(mockDB)
-
-	// 创建成功的事务函数
-	func1Called := false
-	func2Called := false
-
-	func1 := func(ctx context.Context, tx pgx.Tx) error {
-		func1Called = true
-		return nil
-	}
-
-	func2 := func(ctx context.Context, tx pgx.Tx) error {
-		func2Called = true
-		return nil
-	}
-
-	// 执行事务
-	err := txManager.RunInTransaction(context.Background(), func1, func2)
-
-	// 验证结果
-	if err != nil {
-		t.Errorf("期望无错误，但得到: %v", err)
-	}
-
-	if !func1Called {
-		t.Error("第一个事务函数未被调用")
-	}
-
-	if !func2Called {
-		t.Error("第二个事务函数未被调用")
-	}
-
-	if !mockTx.commitCalled {
-		t.Error("事务未被提交")
-	}
-
-	if mockTx.rollbackCalled {
-		t.Error("事务被错误地回滚")
-	}
+// 模拟Logger接口
+type mockLogger struct {
+	mock.Mock
 }
 
-func TestRunInTransaction_FirstFuncFails(t *testing.T) {
-	// 创建模拟对象
-	mockTx := &mockTx{}
-	mockDB := &mockPool{mockTx: mockTx}
-	txManager := NewTxManager(mockDB)
-
-	// 创建事务函数，第一个会失败
-	func1Called := false
-	func2Called := false
-	expectedErr := errors.New("第一个函数失败")
-
-	func1 := func(ctx context.Context, tx pgx.Tx) error {
-		func1Called = true
-		return expectedErr
-	}
-
-	func2 := func(ctx context.Context, tx pgx.Tx) error {
-		func2Called = true
-		return nil
-	}
-
-	// 执行事务
-	err := txManager.RunInTransaction(context.Background(), func1, func2)
-
-	// 验证结果
-	if err == nil {
-		t.Error("期望有错误，但没有得到错误")
-	}
-
-	if !func1Called {
-		t.Error("第一个事务函数未被调用")
-	}
-
-	if func2Called {
-		t.Error("第二个事务函数不应该被调用")
-	}
-
-	if mockTx.commitCalled {
-		t.Error("事务不应该被提交")
-	}
-
-	if !mockTx.rollbackCalled {
-		t.Error("事务应该被回滚")
-	}
+func (m *mockLogger) Error(msg string, keysAndValues ...interface{}) {
+	m.Called(msg, keysAndValues)
 }
 
-func TestRunInTransaction_SecondFuncFails(t *testing.T) {
-	// 创建模拟对象
-	mockTx := &mockTx{}
-	mockDB := &mockPool{mockTx: mockTx}
-	txManager := NewTxManager(mockDB)
-
-	// 创建事务函数，第二个会失败
-	func1Called := false
-	func2Called := false
-	expectedErr := errors.New("第二个函数失败")
-
-	func1 := func(ctx context.Context, tx pgx.Tx) error {
-		func1Called = true
-		return nil
-	}
-
-	func2 := func(ctx context.Context, tx pgx.Tx) error {
-		func2Called = true
-		return expectedErr
-	}
-
-	// 执行事务
-	err := txManager.RunInTransaction(context.Background(), func1, func2)
-
-	// 验证结果
-	if err == nil {
-		t.Error("期望有错误，但没有得到错误")
-	}
-
-	if !func1Called {
-		t.Error("第一个事务函数未被调用")
-	}
-
-	if !func2Called {
-		t.Error("第二个事务函数未被调用")
-	}
-
-	if mockTx.commitCalled {
-		t.Error("事务不应该被提交")
-	}
-
-	if !mockTx.rollbackCalled {
-		t.Error("事务应该被回滚")
-	}
+func (m *mockLogger) Info(msg string, keysAndValues ...interface{}) {
+	m.Called(msg, keysAndValues)
 }
 
-func TestRunInTransaction_BeginFails(t *testing.T) {
-	// 创建模拟对象，Begin会失败
-	expectedErr := errors.New("开始事务失败")
-	mockDB := &mockPool{beginErr: expectedErr}
+func (m *mockLogger) Debug(msg string, keysAndValues ...interface{}) {
+	m.Called(msg, keysAndValues)
+}
+
+// 模拟Metrics接口
+type mockMetrics struct {
+	mock.Mock
+}
+
+func (m *mockMetrics) RecordTransactionDuration(duration time.Duration) {
+	m.Called(duration)
+}
+
+func (m *mockMetrics) IncrementTransactionCount() {
+	m.Called()
+}
+
+func (m *mockMetrics) IncrementFailedTransactionCount() {
+	m.Called()
+}
+
+func (m *mockMetrics) IncrementRetryCount() {
+	m.Called()
+}
+
+// 测试基本事务功能
+func TestRunInTransaction(t *testing.T) {
+	// 创建模拟对象
+	mockDB := new(mockTx)
+	mockTx := new(mockTx)
+
+	// 设置模拟行为
+	mockDB.On("BeginTx", mock.Anything, mock.Anything).Return(mockTx, nil)
+	mockTx.On("Commit", mock.Anything).Return(nil)
+
+	// 创建事务管理器
 	txManager := NewTxManager(mockDB)
 
-	// 创建事务函数
-	funcCalled := false
+	// 定义一个简单的事务函数
 	txFunc := func(ctx context.Context, tx pgx.Tx) error {
-		funcCalled = true
+		// 验证传递的事务是否正确
+		assert.Equal(t, mockTx, tx)
 		return nil
 	}
 
-	// 执行事务
+	// 运行事务
 	err := txManager.RunInTransaction(context.Background(), txFunc)
 
 	// 验证结果
-	if err == nil {
-		t.Error("期望有错误，但没有得到错误")
-	}
-
-	if funcCalled {
-		t.Error("事务函数不应该被调用")
-	}
+	assert.NoError(t, err)
+	mockDB.AssertExpectations(t)
+	mockTx.AssertExpectations(t)
 }
 
-func TestRunInTransaction_CommitFails(t *testing.T) {
-	// 创建模拟对象，Commit会失败
-	expectedErr := errors.New("提交事务失败")
-	mockTx := &mockTx{commitErr: expectedErr}
-	mockDB := &mockPool{mockTx: mockTx}
+// 测试事务回滚
+func TestTransactionRollback(t *testing.T) {
+	// 创建模拟对象
+	mockDB := new(mockTx)
+	mockTx := new(mockTx)
+
+	// 设置模拟行为
+	mockDB.On("BeginTx", mock.Anything, mock.Anything).Return(mockTx, nil)
+	mockTx.On("Rollback", mock.Anything).Return(nil)
+
+	// 创建事务管理器
 	txManager := NewTxManager(mockDB)
 
-	// 创建事务函数
-	funcCalled := false
+	// 定义一个会失败的事务函数
+	expectedErr := errors.New("测试错误")
 	txFunc := func(ctx context.Context, tx pgx.Tx) error {
-		funcCalled = true
-		return nil
+		return expectedErr
 	}
 
-	// 执行事务
+	// 运行事务
 	err := txManager.RunInTransaction(context.Background(), txFunc)
 
 	// 验证结果
-	if err == nil {
-		t.Error("期望有错误，但没有得到错误")
-	}
-
-	if !funcCalled {
-		t.Error("事务函数应该被调用")
-	}
-
-	if !mockTx.commitCalled {
-		t.Error("应该尝试提交事务")
-	}
-
-	if mockTx.rollbackCalled {
-		t.Error("不应该尝试回滚事务")
-	}
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), expectedErr.Error())
+	mockDB.AssertExpectations(t)
+	mockTx.AssertExpectations(t)
 }
 
-func TestRunInTransactionWithOptions(t *testing.T) {
+// 测试事务嵌套
+func TestNestedTransactions(t *testing.T) {
 	// 创建模拟对象
-	mockTx := &mockTx{}
-	mockDB := &mockPool{mockTx: mockTx}
+	mockDB := new(mockTx)
+	mockTx := new(mockTx)
+
+	// 设置模拟行为 - 只应该调用一次BeginTx
+	mockDB.On("BeginTx", mock.Anything, mock.Anything).Return(mockTx, nil).Once()
+	mockTx.On("Commit", mock.Anything).Return(nil).Once()
+
+	// 创建事务管理器
 	txManager := NewTxManager(mockDB)
 
-	// 创建事务函数
-	funcCalled := false
+	// 定义外层事务函数
+	outerFunc := func(ctx context.Context, tx pgx.Tx) error {
+		// 嵌套事务函数
+		innerFunc := func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		}
+
+		// 在外层事务中运行嵌套事务
+		return txManager.RunInTransaction(ctx, innerFunc)
+	}
+
+	// 运行事务
+	err := txManager.RunInTransaction(context.Background(), outerFunc)
+
+	// 验证结果
+	assert.NoError(t, err)
+	mockDB.AssertExpectations(t)
+	mockTx.AssertExpectations(t)
+}
+
+// 测试事务重试机制
+func TestTransactionRetry(t *testing.T) {
+	// 创建模拟对象
+	mockDB := new(mockTx)
+	mockTx1 := new(mockTx)
+	mockTx2 := new(mockTx)
+	mockLogger := new(mockLogger)
+	mockMetrics := new(mockMetrics)
+
+	// 设置死锁错误
+	deadlockErr := &pgconn.PgError{
+		Code: "40P01", // 死锁错误码
+	}
+
+	// 设置模拟行为 - 第一次失败，第二次成功
+	mockDB.On("BeginTx", mock.Anything, mock.Anything).Return(mockTx1, nil).Once()
+	mockTx1.On("Rollback", mock.Anything).Return(nil).Once()
+	mockDB.On("BeginTx", mock.Anything, mock.Anything).Return(mockTx2, nil).Once()
+	mockTx2.On("Commit", mock.Anything).Return(nil).Once()
+
+	// 设置日志和指标记录
+	mockLogger.On("Debug", mock.Anything, mock.Anything).Return(nil)
+	mockLogger.On("Info", mock.Anything, mock.Anything).Return(nil)
+	mockLogger.On("Error", mock.Anything, mock.Anything).Return(nil)
+	mockMetrics.On("RecordTransactionDuration", mock.Anything).Return(nil)
+	mockMetrics.On("IncrementTransactionCount").Return(nil)
+	mockMetrics.On("IncrementFailedTransactionCount").Return(nil)
+	mockMetrics.On("IncrementRetryCount").Return(nil)
+
+	// 创建事务管理器
+	txManager := NewTxManager(mockDB).
+		WithLogger(mockLogger).
+		WithMetrics(mockMetrics)
+
+	// 定义事务函数 - 第一次失败，第二次成功
+	var attempt int
 	txFunc := func(ctx context.Context, tx pgx.Tx) error {
-		funcCalled = true
+		attempt++
+		if attempt == 1 {
+			return deadlockErr
+		}
 		return nil
 	}
 
-	// 创建事务选项
-	opts := pgx.TxOptions{
-		IsoLevel:   pgx.Serializable,
-		AccessMode: pgx.ReadWrite,
+	// 运行事务
+	opts := TxOptions{
+		MaxRetries:   3,
+		RetryBackoff: 10 * time.Millisecond,
 	}
-
-	// 执行事务
-	err := txManager.RunInTransactionWithOptions(context.Background(), opts, txFunc)
+	err := txManager.RunInTransactionWithRetry(context.Background(), opts, txFunc)
 
 	// 验证结果
-	if err != nil {
-		t.Errorf("期望无错误，但得到: %v", err)
-	}
-
-	if !funcCalled {
-		t.Error("事务函数未被调用")
-	}
-
-	if !mockTx.commitCalled {
-		t.Error("事务未被提交")
-	}
-
-	if mockTx.rollbackCalled {
-		t.Error("事务被错误地回滚")
-	}
+	assert.NoError(t, err)
+	assert.Equal(t, 2, attempt)
+	mockDB.AssertExpectations(t)
+	mockTx1.AssertExpectations(t)
+	mockTx2.AssertExpectations(t)
+	mockLogger.AssertExpectations(t)
+	mockMetrics.AssertExpectations(t)
 }
 
-func TestRunInTransaction_NoFuncs(t *testing.T) {
+// 测试链式API
+func TestChainAPI(t *testing.T) {
 	// 创建模拟对象
-	mockTx := &mockTx{}
-	mockDB := &mockPool{mockTx: mockTx}
+	mockDB := new(mockTx)
+	mockTx := new(mockTx)
+
+	// 设置模拟行为
+	mockDB.On("BeginTx", mock.Anything, mock.MatchedBy(func(opts pgx.TxOptions) bool {
+		return opts.IsoLevel == pgx.Serializable && opts.AccessMode == pgx.ReadWrite
+	})).Return(mockTx, nil)
+	mockTx.On("Commit", mock.Anything).Return(nil)
+
+	// 创建事务管理器
 	txManager := NewTxManager(mockDB)
 
-	// 执行事务，不提供任何函数
+	// 定义事务函数
+	var executed bool
+	txFunc := func(ctx context.Context, tx pgx.Tx) error {
+		executed = true
+		return nil
+	}
+
+	// 使用链式API运行事务
+	err := txManager.Begin().
+		WithContext(context.Background()).
+		WithIsolation(pgx.Serializable).
+		WithAccessMode(pgx.ReadWrite).
+		WithRetry(2).
+		AddFunc(txFunc).
+		Run()
+
+	// 验证结果
+	assert.NoError(t, err)
+	assert.True(t, executed)
+	mockDB.AssertExpectations(t)
+	mockTx.AssertExpectations(t)
+}
+
+// 测试事务超时
+func TestTransactionTimeout(t *testing.T) {
+	// 创建模拟对象
+	mockDB := new(mockTx)
+	mockTx := new(mockTx)
+
+	// 设置模拟行为 - 使用匹配任何context和options的参数
+	mockDB.On("BeginTx", mock.Anything, mock.Anything).Return(mockTx, nil)
+	mockTx.On("Rollback", mock.Anything).Return(nil)
+
+	// 创建事务管理器
+	txManager := NewTxManager(mockDB)
+
+	// 定义一个长时间运行的事务函数
+	txFunc := func(ctx context.Context, tx pgx.Tx) error {
+		select {
+		case <-time.After(100 * time.Millisecond):
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	// 运行事务，设置很短的超时时间
+	ctx := context.Background()
+	err := txManager.Begin().
+		WithContext(ctx).
+		WithTimeout(10 * time.Millisecond).
+		Run(txFunc)
+
+	// 验证结果 - 应该超时
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "context deadline exceeded")
+	mockDB.AssertExpectations(t)
+	mockTx.AssertExpectations(t)
+}
+
+// 测试无事务函数
+func TestNoTransactionFunctions(t *testing.T) {
+	// 创建模拟对象
+	mockDB := new(mockTx)
+	mockLogger := new(mockLogger)
+
+	// 设置日志预期
+	mockLogger.On("Error", mock.Anything, mock.Anything).Return(nil)
+	// 注意：此处不需要预期Debug调用，因为空事务函数情况下只会记录错误
+
+	// 创建事务管理器
+	txManager := NewTxManager(mockDB).WithLogger(mockLogger)
+
+	// 运行没有事务函数的事务
 	err := txManager.RunInTransaction(context.Background())
 
 	// 验证结果
-	if err == nil {
-		t.Error("期望有错误，但没有得到错误")
-	}
-
-	if mockTx.commitCalled {
-		t.Error("事务不应该被提交")
-	}
-
-	if mockTx.rollbackCalled {
-		t.Error("事务不应该被回滚")
-	}
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "没有提供事务函数")
+	mockLogger.AssertExpectations(t)
 }
