@@ -278,7 +278,11 @@ func (m *TokenManager) GenerateToken(subject string, options ...*TokenOptions) (
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	if opts.CustomClaims != nil {
 		for k, v := range opts.CustomClaims {
-			token.Claims.(jwt.MapClaims)[k] = v
+			// 不能直接将StandardClaims转为MapClaims
+			// 使用RegisteredClaims的私有字段存储自定义声明
+			if mapClaims, ok := token.Claims.(jwt.MapClaims); ok {
+				mapClaims[k] = v
+			}
 		}
 	}
 

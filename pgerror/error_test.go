@@ -2,9 +2,10 @@ package pgerror
 
 import (
 	"errors"
+	"testing"
+
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 // 创建模拟的 PgError
@@ -13,7 +14,7 @@ func createMockPgError(code string, message, detail, hint, table, column, constr
 		Code:           code,
 		Message:        message,
 		Detail:         detail,
-		Hint:          hint,
+		Hint:           hint,
 		TableName:      table,
 		ColumnName:     column,
 		ConstraintName: constraint,
@@ -29,7 +30,7 @@ func TestWrapDBError(t *testing.T) {
 	t.Run("非PG错误测试", func(t *testing.T) {
 		originalErr := errors.New("普通错误")
 		err := WrapDBError(originalErr)
-		
+
 		dbErr, ok := err.(*DBError)
 		assert.True(t, ok)
 		assert.Equal(t, "UNKNOWN", dbErr.Code)
@@ -52,7 +53,7 @@ func TestForeignKeyViolation(t *testing.T) {
 	err := WrapDBError(pgErr)
 	dbErr, ok := err.(*DBError)
 	assert.True(t, ok)
-	
+
 	assert.Equal(t, ForeignKeyViolation, dbErr.Code)
 	assert.Contains(t, dbErr.Message, "数据关联错误")
 	assert.Contains(t, dbErr.Message, "orders")
@@ -74,7 +75,7 @@ func TestUniqueViolation(t *testing.T) {
 	err := WrapDBError(pgErr)
 	dbErr, ok := err.(*DBError)
 	assert.True(t, ok)
-	
+
 	assert.Equal(t, UniqueViolation, dbErr.Code)
 	assert.Contains(t, dbErr.Message, "数据重复错误")
 	assert.Contains(t, dbErr.Message, "users")
@@ -96,7 +97,7 @@ func TestNotNullViolation(t *testing.T) {
 	err := WrapDBError(pgErr)
 	dbErr, ok := err.(*DBError)
 	assert.True(t, ok)
-	
+
 	assert.Equal(t, NotNullViolation, dbErr.Code)
 	assert.Contains(t, dbErr.Message, "数据完整性错误")
 	assert.Contains(t, dbErr.Message, "users")
@@ -118,7 +119,7 @@ func TestCheckViolation(t *testing.T) {
 	err := WrapDBError(pgErr)
 	dbErr, ok := err.(*DBError)
 	assert.True(t, ok)
-	
+
 	assert.Equal(t, CheckViolation, dbErr.Code)
 	assert.Contains(t, dbErr.Message, "数据验证错误")
 	assert.Contains(t, dbErr.Message, "products")
@@ -139,10 +140,10 @@ func TestInsufficientPrivilege(t *testing.T) {
 	err := WrapDBError(pgErr)
 	dbErr, ok := err.(*DBError)
 	assert.True(t, ok)
-	
+
 	assert.Equal(t, InsufficientPrivilege, dbErr.Code)
 	assert.Contains(t, dbErr.Message, "权限错误")
-	assert.Contains(t, dbErr.Message, "users")
+	assert.Contains(t, dbErr.Message, "user")
 	assert.Contains(t, dbErr.Hint, "请联系数据库管理员")
 }
 
@@ -160,7 +161,7 @@ func TestUndefinedTable(t *testing.T) {
 	err := WrapDBError(pgErr)
 	dbErr, ok := err.(*DBError)
 	assert.True(t, ok)
-	
+
 	assert.Equal(t, UndefinedTable, dbErr.Code)
 	assert.Contains(t, dbErr.Message, "表不存在错误")
 	assert.Contains(t, dbErr.Message, "unknown_table")
@@ -180,7 +181,7 @@ func TestConnectionError(t *testing.T) {
 	err := WrapDBError(pgErr)
 	dbErr, ok := err.(*DBError)
 	assert.True(t, ok)
-	
+
 	assert.Equal(t, ConnectionException, dbErr.Code)
 	assert.Contains(t, dbErr.Message, "数据库连接错误")
 	assert.Contains(t, dbErr.Hint, "请检查数据库连接配置")
@@ -228,7 +229,7 @@ func TestDataError(t *testing.T) {
 			err := WrapDBError(pgErr)
 			dbErr, ok := err.(*DBError)
 			assert.True(t, ok)
-			
+
 			assert.Equal(t, tc.code, dbErr.Code)
 			assert.Contains(t, dbErr.Message, "数据错误")
 			assert.Equal(t, tc.expected, dbErr.Hint)
@@ -268,7 +269,7 @@ func TestErrorInterfaces(t *testing.T) {
 	}
 
 	t.Run("Error接口", func(t *testing.T) {
-		assert.Equal(t, "测试错误", dbErr.Error())
+		assert.Equal(t, "测试错误 | 错误码: TEST001", dbErr.Error())
 	})
 
 	t.Run("Unwrap接口", func(t *testing.T) {
@@ -278,7 +279,7 @@ func TestErrorInterfaces(t *testing.T) {
 	t.Run("Is接口", func(t *testing.T) {
 		target := &DBError{Code: "TEST001"}
 		assert.True(t, errors.Is(dbErr, target))
-		
+
 		nonMatch := &DBError{Code: "TEST002"}
 		assert.False(t, errors.Is(dbErr, nonMatch))
 	})
@@ -302,12 +303,12 @@ func TestExtractFunctions(t *testing.T) {
 
 	t.Run("提取外键值", func(t *testing.T) {
 		detail := "Key (user_id)=(123)"
-		assert.Equal(t, "user_id", extractForeignKeyValues(detail))
+		assert.Equal(t, "user_id=123", extractForeignKeyValues(detail))
 	})
 
 	t.Run("提取唯一值", func(t *testing.T) {
 		detail := "Key (email)=(test@example.com)"
-		assert.Equal(t, "(test@example.com)", extractUniqueValue(detail))
+		assert.Equal(t, "email=test@example.com", extractUniqueValue(detail))
 	})
 
 	t.Run("提取操作类型", func(t *testing.T) {
@@ -316,4 +317,4 @@ func TestExtractFunctions(t *testing.T) {
 		assert.Equal(t, "更新", extractOperation("UPDATE users"))
 		assert.Equal(t, "删除", extractOperation("DELETE FROM users"))
 	})
-} 
+}

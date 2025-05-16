@@ -353,7 +353,7 @@ func WrapDBError(err error) error {
 
 		// 恢复错误
 		case DeadlockDetected:
-			return handleDeadlockError(dbErr, pgErr)
+			return handleDeadlockError(dbErr)
 
 		// PL/pgSQL错误
 		case PlPgSQLError, RaiseException, NoDataFound, TooManyRows:
@@ -547,11 +547,13 @@ func handleNotNullViolation(dbErr *DBError, pgErr *pgconn.PgError) *DBError {
 func handleInsufficientPrivilege(dbErr *DBError, pgErr *pgconn.PgError) *DBError {
 	operation := extractOperation(pgErr.Message)
 	object := extractObject(pgErr.Message)
+	tableName := pgErr.TableName
 
 	dbErr.Message = fmt.Sprintf(
-		"权限错误：当前用户没有权限执行%s操作（对象：%s）",
+		"权限错误：当前用户没有权限执行%s操作（对象：%s，表：%s）",
 		operation,
 		object,
+		tableName,
 	)
 
 	dbErr.Hint = "请联系数据库管理员获取必要权限"
@@ -1075,7 +1077,7 @@ func handleOperatorInterventionError(dbErr *DBError, pgErr *pgconn.PgError) *DBE
 }
 
 // 处理死锁错误
-func handleDeadlockError(dbErr *DBError, pgErr *pgconn.PgError) *DBError {
+func handleDeadlockError(dbErr *DBError) *DBError {
 	dbErr.Message = "数据库死锁错误：检测到事务间的死锁"
 	dbErr.Hint = "请稍后重试操作，或者检查应用程序的事务逻辑"
 	return dbErr
