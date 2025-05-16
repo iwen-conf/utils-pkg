@@ -25,7 +25,7 @@
 ## 安装
 
 ```bash
-go get github.com/yourusername/utils-pkg
+go get github.com/iwen-conf/utils-pkg
 ```
 
 ## 详细文档
