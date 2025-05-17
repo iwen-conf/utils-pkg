@@ -358,17 +358,17 @@ func (m *TokenManager) ValidateToken(tokenStr string) (*StandardClaims, error) {
 	return nil, errors.New("无效的令牌")
 }
 
-// RefreshToken 刷新访问令牌
-func (m *TokenManager) RefreshToken(refreshTokenStr string) (string, error) {
+// RefreshToken 刷新访问令牌并返回访问令牌和刷新令牌
+func (m *TokenManager) RefreshToken(refreshTokenStr string) (accessToken string, refreshToken string, err error) {
 	// 验证刷新令牌
 	claims, err := m.ValidateToken(refreshTokenStr)
 	if err != nil {
-		return "", fmt.Errorf("刷新令牌验证失败: %w", err)
+		return "", "", fmt.Errorf("刷新令牌验证失败: %w", err)
 	}
 
 	// 确保是刷新令牌类型
 	if claims.TokenType != RefreshToken {
-		return "", errors.New("提供的不是有效的刷新令牌")
+		return "", "", errors.New("提供的不是有效的刷新令牌")
 	}
 
 	// 创建新的访问令牌
@@ -377,7 +377,12 @@ func (m *TokenManager) RefreshToken(refreshTokenStr string) (string, error) {
 		SessionID: claims.SessionID,
 	}
 
-	return m.GenerateToken(claims.Subject, options)
+	accessToken, err = m.GenerateToken(claims.Subject, options)
+	if err != nil {
+		return "", "", fmt.Errorf("生成访问令牌失败: %w", err)
+	}
+
+	return accessToken, refreshTokenStr, nil
 }
 
 // 检查令牌格式是否有效（快速预检查）

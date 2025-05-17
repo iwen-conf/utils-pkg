@@ -134,9 +134,14 @@ func TestTokenManager_RefreshToken(t *testing.T) {
 	}
 
 	// 使用刷新令牌获取新的访问令牌
-	accessToken, err := manager.RefreshToken(refreshToken)
+	accessToken, newRefreshToken, err := manager.RefreshToken(refreshToken)
 	if err != nil {
 		t.Fatalf("Failed to refresh token: %v", err)
+	}
+
+	// 验证返回的刷新令牌是否与原始刷新令牌相同
+	if newRefreshToken != refreshToken {
+		t.Errorf("Expected returned refresh token to match original, got different token")
 	}
 
 	// 验证新的访问令牌
@@ -157,7 +162,7 @@ func TestTokenManager_RefreshToken(t *testing.T) {
 	}
 
 	// 尝试使用访问令牌作为刷新令牌 (应该失败)
-	_, err = manager.RefreshToken(accessToken)
+	_, _, err = manager.RefreshToken(accessToken)
 	if err == nil {
 		t.Error("Using access token as refresh token should fail")
 	}
