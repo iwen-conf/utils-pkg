@@ -3,6 +3,7 @@ package crypto
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"testing"
 )
 
@@ -421,5 +422,313 @@ func TestPasswordPolicy_Parallel(t *testing.T) {
 				t.Errorf("ValidatePassword() error = %v, wantErr %v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestArgon2Params(t *testing.T) {
+	// 测试默认参数
+	defaultParams := DefaultArgon2Params()
+	if defaultParams.Memory != 64*1024 {
+		t.Errorf("Expected default memory 64KB, got %d", defaultParams.Memory)
+	}
+	if defaultParams.Iterations != 3 {
+		t.Errorf("Expected default iterations 3, got %d", defaultParams.Iterations)
+	}
+	if defaultParams.Parallelism != 4 {
+		t.Errorf("Expected default parallelism 4, got %d", defaultParams.Parallelism)
+	}
+	if defaultParams.Type != Argon2id {
+		t.Errorf("Expected default type Argon2id, got %d", defaultParams.Type)
+	}
+
+	// 测试快速参数
+	fastParams := FastArgon2Params()
+	if fastParams.Memory != 32*1024 {
+		t.Errorf("Expected fast memory 32KB, got %d", fastParams.Memory)
+	}
+	if fastParams.Iterations != 2 {
+		t.Errorf("Expected fast iterations 2, got %d", fastParams.Iterations)
+	}
+}
+
+func TestHashWithArgon2(t *testing.T) {
+	password := []byte("test-password-123")
+
+	tests := []struct {
+		name   string
+		params *Argon2Params
+	}{
+		{
+			name:   "DefaultParams",
+			params: DefaultArgon2Params(),
+		},
+		{
+			name:   "FastParams",
+			params: FastArgon2Params(),
+		},
+		{
+			name:   "NilParams",
+			params: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hash, err := HashWithArgon2(password, tt.params)
+			if err != nil {
+				t.Fatalf("HashWithArgon2() error = %v", err)
+			}
+
+			// 验证哈希格式
+			if len(hash) == 0 {
+				t.Error("Hash is empty")
+			}
+
+			// 验证能够正确验证
+			valid, err := VerifyArgon2Hash([]byte(hash), password)
+			if err != nil {
+				t.Fatalf("VerifyArgon2Hash() error = %v", err)
+			}
+			if !valid {
+				t.Error("Hash verification failed")
+			}
+
+			// 验证错误密码失败
+			wrongPassword := []byte("wrong-password")
+			valid, err = VerifyArgon2Hash([]byte(hash), wrongPassword)
+			if err != nil {
+				t.Fatalf("VerifyArgon2Hash() error = %v", err)
+			}
+			if valid {
+				t.Error("Hash verification should fail for wrong password")
+			}
+		})
+	}
+}
+
+func TestVerifyArgon2Hash_InvalidFormat(t *testing.T) {
+	password := []byte("test-password")
+	
+	// 测试无效格式
+	invalidHashes := []string{
+		"",
+		"invalid-format",
+		"$argon2x$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG",
+		"$argon2id$v=18$m=65536,t=3,p=4$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG",
+		"$argon2id$v=19$m=0,t=3,p=4$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG",
+	}
+
+	for _, hash := range invalidHashes {
+		_, err := VerifyArgon2Hash([]byte(hash), password)
+		if err == nil {
+			t.Errorf("VerifyArgon2Hash() should return error for invalid hash: %s", hash)
+		}
+	}
+}
+
+func TestScryptParams(t *testing.T) {
+	// 测试默认参数
+	defaultParams := DefaultScryptParams()
+	if defaultParams.N != 32768 {
+		t.Errorf("Expected default N 32768, got %d", defaultParams.N)
+	}
+	if defaultParams.R != 8 {
+		t.Errorf("Expected default R 8, got %d", defaultParams.R)
+	}
+	if defaultParams.P != 1 {
+		t.Errorf("Expected default P 1, got %d", defaultParams.P)
+	}
+
+	// 测试快速参数
+	fastParams := FastScryptParams()
+	if fastParams.N != 16384 {
+		t.Errorf("Expected fast N 16384, got %d", fastParams.N)
+	}
+}
+
+func TestHashWithScrypt(t *testing.T) {
+	password := []byte("test-password-123")
+
+	tests := []struct {
+		name   string
+		params *ScryptParams
+	}{
+		{
+			name:   "DefaultParams",
+			params: DefaultScryptParams(),
+		},
+		{
+			name:   "FastParams",
+			params: FastScryptParams(),
+		},
+		{
+			name:   "NilParams",
+			params: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hash, err := HashWithScrypt(password, tt.params)
+			if err != nil {
+				t.Fatalf("HashWithScrypt() error = %v", err)
+			}
+
+			// 验证哈希格式
+			if len(hash) == 0 {
+				t.Error("Hash is empty")
+			}
+
+			// 验证能够正确验证
+			valid, err := VerifyScryptHash([]byte(hash), password)
+			if err != nil {
+				t.Fatalf("VerifyScryptHash() error = %v", err)
+			}
+			if !valid {
+				t.Error("Hash verification failed")
+			}
+
+			// 验证错误密码失败
+			wrongPassword := []byte("wrong-password")
+			valid, err = VerifyScryptHash([]byte(hash), wrongPassword)
+			if err != nil {
+				t.Fatalf("VerifyScryptHash() error = %v", err)
+			}
+			if valid {
+				t.Error("Hash verification should fail for wrong password")
+			}
+		})
+	}
+}
+
+func TestVerifyScryptHash_InvalidFormat(t *testing.T) {
+	password := []byte("test-password")
+	
+	// 测试无效格式
+	invalidHashes := []string{
+		"",
+		"invalid-format",
+		"$other$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG",
+		"$scrypt$N=0,r=8,p=1$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG",
+	}
+
+	for _, hash := range invalidHashes {
+		_, err := VerifyScryptHash([]byte(hash), password)
+		if err == nil {
+			t.Errorf("VerifyScryptHash() should return error for invalid hash: %s", hash)
+		}
+	}
+}
+
+func TestPasswordHasherInterface(t *testing.T) {
+	password := []byte("test-password-123")
+
+	hashers := []PasswordHasher{
+		NewBcryptHasher(BcryptCostDefault),
+		NewArgon2Hasher(DefaultArgon2Params()),
+		NewScryptHasher(DefaultScryptParams()),
+	}
+
+	for _, hasher := range hashers {
+		t.Run(fmt.Sprintf("%T", hasher), func(t *testing.T) {
+			// 测试哈希
+			hash, err := hasher.Hash(password)
+			if err != nil {
+				t.Fatalf("Hash() error = %v", err)
+			}
+
+			// 测试验证
+			valid, err := hasher.Verify([]byte(hash), password)
+			if err != nil {
+				t.Fatalf("Verify() error = %v", err)
+			}
+			if !valid {
+				t.Error("Verify() should return true for correct password")
+			}
+
+			// 测试错误密码
+			wrongPassword := []byte("wrong-password")
+			valid, err = hasher.Verify([]byte(hash), wrongPassword)
+			if err != nil {
+				t.Fatalf("Verify() error = %v", err)
+			}
+			if valid {
+				t.Error("Verify() should return false for wrong password")
+			}
+		})
+	}
+}
+
+func TestBenchmarkPasswordHashers(t *testing.T) {
+	password := []byte("test-password")
+	iterations := 5 // 减少迭代次数以避免测试运行时间过长
+
+	results := BenchmarkPasswordHashers(password, iterations)
+
+	// 验证结果包含所有算法
+	expectedAlgorithms := []string{"bcrypt", "argon2", "argon2-fast", "scrypt", "scrypt-fast"}
+	for _, algo := range expectedAlgorithms {
+		if _, exists := results[algo]; !exists {
+			t.Errorf("Benchmark results missing algorithm: %s", algo)
+		}
+		if results[algo] <= 0 {
+			t.Errorf("Benchmark duration for %s should be positive", algo)
+		}
+	}
+}
+
+func BenchmarkArgon2Hashing(b *testing.B) {
+	password := []byte("test-password")
+
+	b.Run("Default", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, _ = HashWithArgon2(password, DefaultArgon2Params())
+		}
+	})
+
+	b.Run("Fast", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, _ = HashWithArgon2(password, FastArgon2Params())
+		}
+	})
+}
+
+func BenchmarkScryptHashing(b *testing.B) {
+	password := []byte("test-password")
+
+	b.Run("Default", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, _ = HashWithScrypt(password, DefaultScryptParams())
+		}
+	})
+
+	b.Run("Fast", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, _ = HashWithScrypt(password, FastScryptParams())
+		}
+	})
+}
+
+func BenchmarkArgon2Verification(b *testing.B) {
+	password := []byte("test-password")
+	hash, _ := HashWithArgon2(password, DefaultArgon2Params())
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = VerifyArgon2Hash([]byte(hash), password)
+	}
+}
+
+func BenchmarkScryptVerification(b *testing.B) {
+	password := []byte("test-password")
+	hash, _ := HashWithScrypt(password, DefaultScryptParams())
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = VerifyScryptHash([]byte(hash), password)
 	}
 }

@@ -15,12 +15,11 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 	"unicode"
 
+	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/scrypt"
-	"golang.org/x/crypto/argon2"
 )
 
 var (
@@ -634,18 +633,18 @@ type ScryptParams struct {
 // DefaultScryptParams 返回推荐的scrypt参数
 func DefaultScryptParams() *ScryptParams {
 	return &ScryptParams{
-		N:          32768,  // 2^15
-		R:          8,       // 块大小
-		P:          1,       // 并行化
-		SaltLength: 16,      // salt长度
-		KeyLength:  32,      // 输出key长度
+		N:          32768, // 2^15
+		R:          8,     // 块大小
+		P:          1,     // 并行化
+		SaltLength: 16,    // salt长度
+		KeyLength:  32,    // 输出key长度
 	}
 }
 
 // FastScryptParams 返回快速但安全的scrypt参数
 func FastScryptParams() *ScryptParams {
 	return &ScryptParams{
-		N:          16384,  // 2^14
+		N:          16384, // 2^14
 		R:          8,
 		P:          1,
 		SaltLength: 16,
@@ -798,51 +797,4 @@ func (s *ScryptHasher) Hash(password []byte) (string, error) {
 // Verify 验证scrypt哈希
 func (s *ScryptHasher) Verify(hash, password []byte) (bool, error) {
 	return VerifyScryptHash(hash, password)
-}
-
-// BenchmarkPasswordHashers 性能测试不同的密码哈希算法
-// 返回每个算法的耗时（纳秒）
-func BenchmarkPasswordHashers(password []byte, iterations int) map[string]time.Duration {
-	results := make(map[string]time.Duration)
-	
-	// 测试bcrypt
-	start := time.Now()
-	for i := 0; i < iterations; i++ {
-		HashPasswordWithCost(password, BcryptCostDefault)
-	}
-	results["bcrypt"] = time.Since(start)
-	
-	// 测试Argon2
-	argonParams := DefaultArgon2Params()
-	start = time.Now()
-	for i := 0; i < iterations; i++ {
-		HashWithArgon2(password, argonParams)
-	}
-	results["argon2"] = time.Since(start)
-	
-	// 测试快速Argon2
-	fastArgonParams := FastArgon2Params()
-	start = time.Now()
-	for i := 0; i < iterations; i++ {
-		HashWithArgon2(password, fastArgonParams)
-	}
-	results["argon2-fast"] = time.Since(start)
-	
-	// 测试scrypt
-	scryptParams := DefaultScryptParams()
-	start = time.Now()
-	for i := 0; i < iterations; i++ {
-		HashWithScrypt(password, scryptParams)
-	}
-	results["scrypt"] = time.Since(start)
-	
-	// 测试快速scrypt
-	fastScryptParams := FastScryptParams()
-	start = time.Now()
-	for i := 0; i < iterations; i++ {
-		HashWithScrypt(password, fastScryptParams)
-	}
-	results["scrypt-fast"] = time.Since(start)
-	
-	return results
 }
