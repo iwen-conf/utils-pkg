@@ -110,12 +110,6 @@ func TestHashFunctions(t *testing.T) {
 		t.Error("SHA512 hash length incorrect")
 	}
 
-	// 测试 MD5
-	md5Hash := HashMD5(data)
-	if len(md5Hash) != 16 { // MD5 produces 16 bytes
-		t.Error("MD5 hash length incorrect")
-	}
-
 	// 验证相同输入产生相同哈希
 	if !bytes.Equal(HashSHA256(data), HashSHA256(data)) {
 		t.Error("SHA256 hash not consistent")
@@ -291,12 +285,6 @@ func BenchmarkHashFunctions(b *testing.B) {
 	b.Run("SHA512", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			_ = HashSHA512(data)
-		}
-	})
-
-	b.Run("MD5", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			_ = HashMD5(data)
 		}
 	})
 }
