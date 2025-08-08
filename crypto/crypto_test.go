@@ -49,7 +49,8 @@ func TestNewAESEncryptorWithMode(t *testing.T) {
 
 func TestAESEncryptor_EncryptDecrypt(t *testing.T) {
 	key := make([]byte, 32)
-	encryptor, _ := NewAESEncryptor(key)
+	// 使用GCM模式（推荐）
+	encryptor, _ := NewAESEncryptorWithMode(key, ModeGCM)
 
 	// 测试加密解密
 	plaintext := []byte("Hello, World!")
@@ -104,9 +105,34 @@ func TestAESEncryptor_GCM(t *testing.T) {
 	}
 }
 
+func TestAESEncryptor_CFB_Deprecated(t *testing.T) {
+	key := make([]byte, 32)
+	// 测试已弃用的CFB模式以确保向后兼容
+	encryptor, _ := NewAESEncryptorWithMode(key, ModeCFB)
+
+	// 测试 CFB 模式加密解密
+	plaintext := []byte("Hello, World with deprecated CFB mode!")
+	ciphertext, err := encryptor.Encrypt(plaintext)
+	if err != nil {
+		t.Fatalf("CFB encryption failed: %v", err)
+	}
+
+	// 测试 CFB 解密
+	decrypted, err := encryptor.Decrypt(ciphertext)
+	if err != nil {
+		t.Fatalf("CFB decryption failed: %v", err)
+	}
+
+	// 验证解密后的文本等于原文
+	if !bytes.Equal(decrypted, plaintext) {
+		t.Error("CFB decrypted text does not match original")
+	}
+}
+
 func TestAESEncryptor_URLSafeEncoding(t *testing.T) {
 	key := make([]byte, 32)
-	encryptor, _ := NewAESEncryptor(key)
+	// 使用GCM模式（推荐）
+	encryptor, _ := NewAESEncryptorWithMode(key, ModeGCM)
 
 	// 测试 URL 安全编码
 	plaintext := []byte("Hello, URL-safe encoding!")
@@ -297,7 +323,7 @@ func TestGenerateRandomBytes(t *testing.T) {
 
 func BenchmarkAESEncryptor_Encrypt(b *testing.B) {
 	key := make([]byte, 32)
-	encryptor, _ := NewAESEncryptor(key)
+	encryptor, _ := NewAESEncryptorWithMode(key, ModeGCM)
 	plaintext := []byte("Hello, World!")
 
 	b.ResetTimer()
@@ -308,7 +334,7 @@ func BenchmarkAESEncryptor_Encrypt(b *testing.B) {
 
 func BenchmarkAESEncryptor_Decrypt(b *testing.B) {
 	key := make([]byte, 32)
-	encryptor, _ := NewAESEncryptor(key)
+	encryptor, _ := NewAESEncryptorWithMode(key, ModeGCM)
 	plaintext := []byte("Hello, World!")
 	ciphertext, _ := encryptor.Encrypt(plaintext)
 
