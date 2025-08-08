@@ -55,13 +55,13 @@ func HashWithScrypt(password []byte, params *ScryptParams) (string, error) {
 	// 生成随机salt
 	salt := make([]byte, params.SaltLength)
 	if _, err := rand.Read(salt); err != nil {
-		return "", fmt.Errorf("生成salt失败: %w", err)
+		return "", fmt.Errorf("failed to generate salt: %w", err)
 	}
 
 	// 使用scrypt生成key
 	key, err := scrypt.Key(password, salt, params.N, params.R, params.P, params.KeyLength)
 	if err != nil {
-		return "", fmt.Errorf("scrypt计算失败: %w", err)
+		return "", fmt.Errorf("scrypt computation failed: %w", err)
 	}
 
 	// 编码格式: $scrypt$N={n},r={r},p={p}${salt}${hash}
@@ -77,7 +77,7 @@ func VerifyScryptHash(hash, password []byte) (bool, error) {
 	// 解析哈希字符串
 	parts := strings.Split(string(hash), "$")
 	if len(parts) != 5 || parts[1] != "scrypt" {
-		return false, errors.New("无效的scrypt哈希格式")
+		return false, errors.New("invalid scrypt hash format")
 	}
 
 	// 解析参数
@@ -86,24 +86,24 @@ func VerifyScryptHash(hash, password []byte) (bool, error) {
 
 	_, err := fmt.Sscanf(parts[2], "N=%d,r=%d,p=%d", &N, &R, &P)
 	if err != nil {
-		return false, fmt.Errorf("解析参数失败: %w", err)
+		return false, fmt.Errorf("failed to parse parameters: %w", err)
 	}
 
 	// 解码salt和hash
 	salt, err = base64.RawStdEncoding.DecodeString(parts[3])
 	if err != nil {
-		return false, fmt.Errorf("解码salt失败: %w", err)
+		return false, fmt.Errorf("failed to decode salt: %w", err)
 	}
 
 	key, err = base64.RawStdEncoding.DecodeString(parts[4])
 	if err != nil {
-		return false, fmt.Errorf("解码hash失败: %w", err)
+		return false, fmt.Errorf("failed to decode hash: %w", err)
 	}
 
 	// 使用相同参数重新计算哈希
 	computedKey, err := scrypt.Key(password, salt, N, R, P, len(key))
 	if err != nil {
-		return false, fmt.Errorf("scrypt计算失败: %w", err)
+		return false, fmt.Errorf("scrypt computation failed: %w", err)
 	}
 
 	// 安全比较

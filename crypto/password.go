@@ -64,10 +64,10 @@ func (p *PasswordPolicy) SetDisallowWords(words []string) {
 func (p *PasswordPolicy) ValidatePassword(password string) error {
 	// 检查长度
 	if len(password) < p.MinLength {
-		return fmt.Errorf("密码长度不能小于 %d 个字符", p.MinLength)
+		return fmt.Errorf("password must be at least %d characters long", p.MinLength)
 	}
 	if len(password) > p.MaxLength {
-		return fmt.Errorf("密码长度不能大于 %d 个字符", p.MaxLength)
+		return fmt.Errorf("password must not exceed %d characters", p.MaxLength)
 	}
 
 	// 使用一次遍历检查所有字符类型
@@ -95,16 +95,16 @@ func (p *PasswordPolicy) ValidatePassword(password string) error {
 
 	// 检查字符类型
 	if p.RequireUpper && !hasUpper {
-		return errors.New("密码必须包含大写字母")
+		return errors.New("password must contain uppercase letters")
 	}
 	if p.RequireLower && !hasLower {
-		return errors.New("密码必须包含小写字母")
+		return errors.New("password must contain lowercase letters")
 	}
 	if p.RequireNumber && !hasNumber {
-		return errors.New("密码必须包含数字")
+		return errors.New("password must contain numbers")
 	}
 	if p.RequireSpecial && !hasSpecial {
-		return errors.New("密码必须包含特殊字符")
+		return errors.New("password must contain special characters")
 	}
 
 	// 检查禁用词
@@ -118,7 +118,7 @@ func (p *PasswordPolicy) ValidatePassword(password string) error {
 	// 使用预编译的正则表达式
 	for i, regex := range regexes {
 		if regex.MatchString(passwordLower) {
-			return fmt.Errorf("密码不能包含常见词汇: %s", p.DisallowWords[i])
+			return fmt.Errorf("password cannot contain common words: %s", p.DisallowWords[i])
 		}
 	}
 

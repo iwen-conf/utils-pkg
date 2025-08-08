@@ -69,7 +69,7 @@ func HashWithArgon2(password []byte, params *Argon2Params) (string, error) {
 	// 生成随机salt
 	salt := make([]byte, params.SaltLength)
 	if _, err := rand.Read(salt); err != nil {
-		return "", fmt.Errorf("生成salt失败: %w", err)
+		return "", fmt.Errorf("failed to generate salt: %w", err)
 	}
 
 	// 根据类型选择Argon2变种
@@ -100,7 +100,7 @@ func VerifyArgon2Hash(hash, password []byte) (bool, error) {
 	// 解析哈希字符串
 	parts := strings.Split(string(hash), "$")
 	if len(parts) != 6 {
-		return false, errors.New("无效的Argon2哈希格式")
+		return false, errors.New("invalid Argon2 hash format")
 	}
 
 	// 解析参数
@@ -108,7 +108,7 @@ func VerifyArgon2Hash(hash, password []byte) (bool, error) {
 	if parts[1] == "argon2i" {
 		argonType = Argon2i
 	} else if parts[1] != "argon2id" {
-		return false, errors.New("不支持的Argon2类型")
+		return false, errors.New("unsupported Argon2 type")
 	}
 
 	var memory, iterations, parallelism uint32
@@ -117,28 +117,28 @@ func VerifyArgon2Hash(hash, password []byte) (bool, error) {
 
 	_, err := fmt.Sscanf(parts[2], "v=%d", &version)
 	if err != nil || version != 19 {
-		return false, errors.New("不支持的Argon2版本")
+		return false, errors.New("unsupported Argon2 version")
 	}
 
 	_, err = fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &iterations, &parallelism)
 	if err != nil {
-		return false, fmt.Errorf("解析参数失败: %w", err)
+		return false, fmt.Errorf("failed to parse parameters: %w", err)
 	}
 
 	// 检查参数有效性
 	if memory == 0 {
-		return false, errors.New("内存大小不能为0")
+		return false, errors.New("memory size cannot be zero")
 	}
 
 	// 解码salt和hash
 	salt, err = base64.RawStdEncoding.DecodeString(parts[4])
 	if err != nil {
-		return false, fmt.Errorf("解码salt失败: %w", err)
+		return false, fmt.Errorf("failed to decode salt: %w", err)
 	}
 
 	key, err = base64.RawStdEncoding.DecodeString(parts[5])
 	if err != nil {
-		return false, fmt.Errorf("解码hash失败: %w", err)
+		return false, fmt.Errorf("failed to decode hash: %w", err)
 	}
 
 	// 使用相同参数重新计算哈希

@@ -6,7 +6,9 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
+	"math"
 	"sync"
 )
 
@@ -18,6 +20,16 @@ const (
 	EncodingStandard EncodingType = iota
 	// EncodingURLSafe 使用对 URL 安全的 Base64 编码
 	EncodingURLSafe
+)
+
+// EncryptionMode 定义加密模式
+type EncryptionMode int
+
+const (
+	// ModeGCM AES-GCM 模式（推荐，提供认证加密）
+	ModeGCM EncryptionMode = iota
+	// ModeCFB AES-CFB 模式（已弃用，不安全）
+	ModeCFB
 )
 
 // Encryptor 加密器接口。
@@ -40,9 +52,31 @@ type AESEncryptor struct {
 // NewAESEncryptor 创建新的 AES-GCM 加密器。
 // key 的长度必须是 16, 24, 或 32 字节，分别对应 AES-128, AES-192, AES-256。
 func NewAESEncryptor(key []byte) (*AESEncryptor, error) {
+	return NewAESEncryptorWithMode(key, ModeGCM)
+}
+
+// NewAESEncryptorWithMode creates a new AES encryptor with the specified mode
+// Note: Only ModeGCM is recommended for security
+func NewAESEncryptorWithMode(key []byte, mode EncryptionMode) (*AESEncryptor, error) {
 	keySize := len(key)
 	if keySize != 16 && keySize != 24 && keySize != 32 {
 		return nil, errors.New("invalid key size: must be 16, 24, or 32 bytes")
+	}
+	
+	// Validate encryption mode
+	if mode == ModeCFB {
+		fmt.Println("WARNING: CFB mode is deprecated and not secure. Use GCM mode instead.")
+	}
+	
+	// For security, recommend AES-256 (32 bytes) for new applications
+	if keySize < 32 {
+		fmt.Printf("WARNING: Using AES-%d is less secure than AES-256. Consider upgrading to a 32-byte key.\n", keySize*8)
+	}
+	
+	// Check key entropy
+	entropy := calculateKeyEntropy(key)
+	if entropy < 3.0 {
+		return nil, fmt.Errorf("key has low entropy (%.2f bits/byte). Use a cryptographically secure random key generator", entropy)
 	}
 
 	// 预先创建 cipher.Block 以提高效率。
@@ -147,4 +181,29 @@ func (e *AESEncryptor) DecryptWithOptions(ciphertext string, encoding EncodingTy
 // Decrypt 使用标准 Base64 编码解密数据。
 func (e *AESEncryptor) Decrypt(ciphertext string) ([]byte, error) {
 	return e.DecryptWithOptions(ciphertext, EncodingStandard)
+}
+
+// calculateKeyEntropy calculates the approximate entropy of a key
+// This is a simple heuristic to detect obviously weak keys
+func calculateKeyEntropy(key []byte) float64 {
+	if len(key) == 0 {
+		return 0
+	}
+	
+	// Count byte frequencies
+	freq := make([]int, 256)
+	for _, b := range key {
+		freq[b]++
+	}
+	
+	// Calculate Shannon entropy
+	entropy := 0.0
+	for _, count := range freq {
+		if count > 0 {
+			probability := float64(count) / float64(len(key))
+			entropy -= probability * math.Log2(probability)
+		}
+	}
+	
+	return entropy
 }

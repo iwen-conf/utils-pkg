@@ -121,7 +121,37 @@ type TokenManager struct {
 }
 
 // NewTokenManager 创建新的JWT令牌管理器
-func NewTokenManager(secretKey string, options ...*JWTOptions) *TokenManager {
+func NewTokenManager(secretKey string, options ...*JWTOptions) (*TokenManager, error) {
+	// Validate secret key strength
+	if len(secretKey) < 32 {
+		return nil, errors.New("JWT secret key must be at least 32 characters long for security")
+	}
+	
+	// Check key entropy (basic check for character variety)
+	var hasUpper, hasLower, hasNumber, hasSpecial bool
+	for _, c := range secretKey {
+		switch {
+		case c >= 'A' && c <= 'Z':
+			hasUpper = true
+		case c >= 'a' && c <= 'z':
+			hasLower = true
+		case c >= '0' && c <= '9':
+			hasNumber = true
+		default:
+			hasSpecial = true
+		}
+	}
+	
+	variety := 0
+	if hasUpper { variety++ }
+	if hasLower { variety++ }
+	if hasNumber { variety++ }
+	if hasSpecial { variety++ }
+	
+	if variety < 3 {
+		return nil, errors.New("JWT secret key should contain at least 3 different character types (uppercase, lowercase, numbers, special characters)")
+	}
+	
 	opts := DefaultJWTOptions()
 	if len(options) > 0 && options[0] != nil {
 		opts = options[0]
@@ -155,6 +185,16 @@ func NewTokenManager(secretKey string, options ...*JWTOptions) *TokenManager {
 		go manager.startCleanupRoutine()
 	}
 
+	return manager, nil
+}
+
+// MustNewTokenManager creates a new JWT token manager and panics on error
+// This function maintains backward compatibility with existing code
+func MustNewTokenManager(secretKey string, options ...*JWTOptions) *TokenManager {
+	manager, err := NewTokenManager(secretKey, options...)
+	if err != nil {
+		panic(err)
+	}
 	return manager
 }
 
@@ -229,7 +269,7 @@ func (m *TokenManager) logf(format string, args ...interface{}) {
 func (m *TokenManager) GenerateToken(subject string, options ...*TokenOptions) (string, error) {
 	// 验证subject不能为空
 	if subject == "" {
-		return "", errors.New("主题(subject)不能为空")
+		return "", errors.New("subject cannot be empty")
 	}
 
 	// 使用默认选项或者用户提供的选项
@@ -313,17 +353,17 @@ func (m *TokenManager) ValidateToken(tokenStr string) (*StandardClaims, error) {
 	// 快速检查是否在黑名单中
 	if m.IsBlacklisted(tokenStr) {
 		if m.enableCache {
-			m.cacheResult(tokenStr, nil, errors.New("令牌已被撤销"))
+			m.cacheResult(tokenStr, nil, errors.New("token has been revoked"))
 		}
-		return nil, errors.New("令牌已被撤销")
+		return nil, errors.New("token has been revoked")
 	}
 
 	// 进行预检查，避免解析无效token
 	if !m.isTokenFormatValid(tokenStr) {
 		if m.enableCache {
-			m.cacheResult(tokenStr, nil, errors.New("令牌格式无效"))
+			m.cacheResult(tokenStr, nil, errors.New("invalid token format"))
 		}
-		return nil, errors.New("令牌格式无效")
+		return nil, errors.New("invalid token format")
 	}
 
 	// 解析并验证令牌
@@ -353,9 +393,9 @@ func (m *TokenManager) ValidateToken(tokenStr string) (*StandardClaims, error) {
 
 	// 缓存无效令牌结果
 	if m.enableCache {
-		m.cacheResult(tokenStr, nil, errors.New("无效的令牌"))
+		m.cacheResult(tokenStr, nil, errors.New("invalid token"))
 	}
-	return nil, errors.New("无效的令牌")
+	return nil, errors.New("invalid token")
 }
 
 // RefreshToken 刷新访问令牌并返回访问令牌和刷新令牌
@@ -368,7 +408,7 @@ func (m *TokenManager) RefreshToken(refreshTokenStr string) (accessToken string,
 
 	// 确保是刷新令牌类型
 	if claims.TokenType != RefreshToken {
-		return "", "", errors.New("提供的不是有效的刷新令牌")
+		return "", "", errors.New("provided token is not a valid refresh token")
 	}
 
 	// 创建新的访问令牌
@@ -506,7 +546,7 @@ func (m *TokenManager) cleanCache() {
 // RevokeToken 撤销令牌（加入黑名单）
 func (m *TokenManager) RevokeToken(tokenStr string) error {
 	if tokenStr == "" {
-		return errors.New("令牌不能为空")
+		return errors.New("token cannot be empty")
 	}
 
 	// 先验证令牌以获取过期时间

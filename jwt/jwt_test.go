@@ -5,10 +5,10 @@ import (
 	"time"
 )
 
-func TestNewTokenManager(t *testing.T) {
-	secretKey := "test-secret"
+func TestMustNewTokenManager(t *testing.T) {
+	secretKey := "this-is-a-very-secure-jwt-secret-key-32bytes!"
 
-	manager := NewTokenManager(secretKey)
+	manager := MustNewTokenManager(secretKey)
 
 	if string(manager.secretKey) != secretKey {
 		t.Errorf("Expected secret key %s, got %s", secretKey, string(manager.secretKey))
@@ -25,7 +25,7 @@ func TestNewTokenManager(t *testing.T) {
 }
 
 func TestTokenManager_GenerateToken(t *testing.T) {
-	manager := NewTokenManager("test-secret")
+	manager := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
 	subject := "123"
 
 	// 测试默认访问令牌
@@ -77,7 +77,7 @@ func TestTokenManager_GenerateToken(t *testing.T) {
 }
 
 func TestTokenManager_ValidateToken(t *testing.T) {
-	manager := NewTokenManager("test-secret")
+	manager := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
 	subject := "123"
 
 	options := &TokenOptions{
@@ -119,7 +119,7 @@ func TestTokenManager_ValidateToken(t *testing.T) {
 }
 
 func TestTokenManager_RefreshToken(t *testing.T) {
-	manager := NewTokenManager("test-secret")
+	manager := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
 	subject := "123"
 	sessionID := "test-session"
 
@@ -169,7 +169,7 @@ func TestTokenManager_RefreshToken(t *testing.T) {
 }
 
 func TestTokenManager_RevokeToken(t *testing.T) {
-	manager := NewTokenManager("test-secret")
+	manager := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
 	subject := "123"
 	token, _ := manager.GenerateToken(subject)
 
@@ -186,7 +186,7 @@ func TestTokenManager_RevokeToken(t *testing.T) {
 
 	// 验证已撤销的令牌不能通过验证
 	_, err = manager.ValidateToken(token)
-	if err == nil || err.Error() != "令牌已被撤销" {
+	if err == nil || err.Error() != "token has been revoked" {
 		t.Errorf("Validation should fail for revoked token, got: %v", err)
 	}
 
@@ -203,7 +203,7 @@ func TestTokenManager_RevokeToken(t *testing.T) {
 }
 
 func BenchmarkTokenManager_GenerateToken(b *testing.B) {
-	manager := NewTokenManager("test-secret")
+	manager := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
 	subject := "123"
 
 	b.ResetTimer()
@@ -213,7 +213,7 @@ func BenchmarkTokenManager_GenerateToken(b *testing.B) {
 }
 
 func BenchmarkTokenManager_ValidateToken(b *testing.B) {
-	manager := NewTokenManager("test-secret")
+	manager := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
 	token, _ := manager.GenerateToken("123")
 
 	b.ResetTimer()
@@ -223,7 +223,7 @@ func BenchmarkTokenManager_ValidateToken(b *testing.B) {
 }
 
 func BenchmarkTokenManager_IsBlacklisted(b *testing.B) {
-	manager := NewTokenManager("test-secret")
+	manager := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
 	token, _ := manager.GenerateToken("123")
 	_ = manager.RevokeToken(token)
 
@@ -263,7 +263,7 @@ func TestTokenManager_ValidateToken_Parallel(t *testing.T) {
 		},
 	}
 
-	manager := NewTokenManager("test-secret")
+	manager := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
 
 	for _, tt := range tests {
 		tt := tt // 捕获循环变量
@@ -290,18 +290,39 @@ func TestTokenManager_ValidateToken_Parallel(t *testing.T) {
 	}
 }
 
+// TestNewTokenManager_InvalidKey 测试无效密钥的错误处理
+func TestNewTokenManager_InvalidKey(t *testing.T) {
+	// 测试过短的密钥
+	_, err := NewTokenManager("short")
+	if err == nil {
+		t.Error("Expected error for short secret key")
+	}
+	
+	// 测试字符类型不足的密钥
+	_, err = NewTokenManager("onlylowercaseletters")
+	if err == nil {
+		t.Error("Expected error for key with insufficient character variety")
+	}
+	
+	// 测试有效密钥
+	_, err = NewTokenManager("this-is-a-very-secure-secret-key-with-mix3d-chars!")
+	if err != nil {
+		t.Errorf("Unexpected error for valid key: %v", err)
+	}
+}
+
 // TestTokenManager_LogControl 测试日志控制功能
 func TestTokenManager_LogControl(t *testing.T) {
 	// 创建一个默认的令牌管理器（默认禁用日志）
-	manager1 := NewTokenManager("test-secret")
+	manager1 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
 
 	// 通过选项启用日志的令牌管理器
 	options := DefaultJWTOptions()
 	options.EnableLog = true
-	manager2 := NewTokenManager("test-secret", options)
+	manager2 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!", options)
 
 	// 使用EnableLog方法启用或禁用日志
-	manager3 := NewTokenManager("test-secret")
+	manager3 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
 	manager3.EnableLog(true)
 
 	// 测试默认值

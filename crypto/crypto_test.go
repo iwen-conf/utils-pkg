@@ -12,6 +12,10 @@ func TestNewAESEncryptor(t *testing.T) {
 	validKeys := []int{16, 24, 32}
 	for _, length := range validKeys {
 		key := make([]byte, length)
+		// Fill with some entropy to pass validation
+		for i := range key {
+			key[i] = byte(i % 256)
+		}
 		encryptor, err := NewAESEncryptor(key)
 		if err != nil {
 			t.Errorf("Failed to create encryptor with key length %d: %v", length, err)
@@ -31,6 +35,10 @@ func TestNewAESEncryptor(t *testing.T) {
 
 func TestAESEncryptor_EncryptDecrypt(t *testing.T) {
 	key := make([]byte, 32)
+	// Fill with some entropy to pass validation
+	for i := range key {
+		key[i] = byte(i % 256)
+	}
 	encryptor, _ := NewAESEncryptor(key)
 
 	// 测试加密解密
@@ -66,6 +74,10 @@ func TestAESEncryptor_EncryptDecrypt(t *testing.T) {
 
 func TestAESEncryptor_URLSafeEncoding(t *testing.T) {
 	key := make([]byte, 32)
+	// Fill with some entropy to pass validation
+	for i := range key {
+		key[i] = byte(i % 256)
+	}
 	encryptor, _ := NewAESEncryptor(key)
 
 	// 测试 URL 安全编码
@@ -251,6 +263,10 @@ func TestGenerateRandomBytes(t *testing.T) {
 
 func BenchmarkAESEncryptor_Encrypt(b *testing.B) {
 	key := make([]byte, 32)
+	// Fill with some entropy to pass validation
+	for i := range key {
+		key[i] = byte(i % 256)
+	}
 	encryptor, _ := NewAESEncryptor(key)
 	plaintext := []byte("Hello, World!")
 
@@ -262,6 +278,10 @@ func BenchmarkAESEncryptor_Encrypt(b *testing.B) {
 
 func BenchmarkAESEncryptor_Decrypt(b *testing.B) {
 	key := make([]byte, 32)
+	// Fill with some entropy to pass validation
+	for i := range key {
+		key[i] = byte(i % 256)
+	}
 	encryptor, _ := NewAESEncryptor(key)
 	plaintext := []byte("Hello, World!")
 	ciphertext, _ := encryptor.Encrypt(plaintext)

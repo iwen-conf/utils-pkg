@@ -3,6 +3,7 @@ package url
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -16,14 +17,14 @@ import (
 
 // 预定义错误类型
 var (
-	ErrInvalidBaseURL   = errors.New("无效的基础URL")
-	ErrMissingTimestamp = errors.New("缺少时间戳参数")
-	ErrMissingSignature = errors.New("缺少签名参数")
-	ErrInvalidTimestamp = errors.New("无效的时间戳格式")
-	ErrExpiredURL       = errors.New("URL已过期")
-	ErrFutureTimestamp  = errors.New("时间戳日期在未来")
-	ErrInvalidSignature = errors.New("无效的签名")
-	ErrEmptySecretKey   = errors.New("密钥不能为空")
+	ErrInvalidBaseURL   = errors.New("invalid base URL")
+	ErrMissingTimestamp = errors.New("missing timestamp parameter")
+	ErrMissingSignature = errors.New("missing signature parameter")
+	ErrInvalidTimestamp = errors.New("invalid timestamp format")
+	ErrExpiredURL       = errors.New("URL has expired")
+	ErrFutureTimestamp  = errors.New("timestamp is in the future")
+	ErrInvalidSignature = errors.New("invalid signature")
+	ErrEmptySecretKey   = errors.New("secret key cannot be empty")
 )
 
 // 时间戳允许的时钟漂移（秒）
@@ -322,8 +323,8 @@ func ValidateSignature(rawURL string, secretKey string, maxAgeSeconds int64) (bo
 	h.Write([]byte(fmt.Sprintf("%d%s", ts, queryStr)))
 	expectedSignature := base64.StdEncoding.EncodeToString(h.Sum(nil))
 
-	// 比较签名
-	if signature != expectedSignature {
+	// 使用恒定时间比较签名
+	if subtle.ConstantTimeCompare([]byte(signature), []byte(expectedSignature)) != 1 {
 		return false, ErrInvalidSignature
 	}
 
