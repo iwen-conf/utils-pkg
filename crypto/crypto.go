@@ -577,6 +577,8 @@ func VerifyArgon2Hash(hash, password []byte) (bool, error) {
 	var argonType Argon2Type = Argon2id
 	if parts[1] == "argon2i" {
 		argonType = Argon2i
+	} else if parts[1] != "argon2id" {
+		return false, errors.New("不支持的Argon2类型")
 	}
 
 	var memory, iterations, parallelism uint32
@@ -591,6 +593,11 @@ func VerifyArgon2Hash(hash, password []byte) (bool, error) {
 	_, err = fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &iterations, &parallelism)
 	if err != nil {
 		return false, fmt.Errorf("解析参数失败: %w", err)
+	}
+	
+	// 检查参数有效性
+	if memory == 0 {
+		return false, errors.New("内存大小不能为0")
 	}
 
 	// 解码salt和hash
@@ -798,3 +805,4 @@ func (s *ScryptHasher) Hash(password []byte) (string, error) {
 func (s *ScryptHasher) Verify(hash, password []byte) (bool, error) {
 	return VerifyScryptHash(hash, password)
 }
+
