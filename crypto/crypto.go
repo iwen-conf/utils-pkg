@@ -13,10 +13,14 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/crypto/scrypt"
+	"golang.org/x/crypto/argon2"
 )
 
 var (
@@ -475,4 +479,370 @@ func GenerateRandomBytes(length int) ([]byte, error) {
 		return nil, err
 	}
 	return b, nil
+}
+
+// Argon2Type Argon2算法类型
+type Argon2Type int
+
+const (
+	// Argon2i 优化的对抗侧信道攻击
+	Argon2i Argon2Type = iota
+	// Argon2id 混合模式，推荐使用
+	Argon2id
+)
+
+// Argon2Params Argon2参数配置
+type Argon2Params struct {
+	// 内存大小（字节）
+	Memory uint32
+	// 迭代次数
+	Iterations uint32
+	// 并行线程数
+	Parallelism uint8
+	// Salt长度
+	SaltLength uint32
+	// Key长度
+	KeyLength uint32
+	// Argon2类型
+	Type Argon2Type
+}
+
+// DefaultArgon2Params 返回推荐的Argon2参数
+func DefaultArgon2Params() *Argon2Params {
+	return &Argon2Params{
+		Memory:      64 * 1024, // 64MB
+		Iterations:  3,
+		Parallelism: 4,
+		SaltLength:  16,
+		KeyLength:   32,
+		Type:        Argon2id,
+	}
+}
+
+// FastArgon2Params 返回快速但安全的Argon2参数
+func FastArgon2Params() *Argon2Params {
+	return &Argon2Params{
+		Memory:      32 * 1024, // 32MB
+		Iterations:  2,
+		Parallelism: 2,
+		SaltLength:  16,
+		KeyLength:   32,
+		Type:        Argon2id,
+	}
+}
+
+// HashWithArgon2 使用Argon2算法哈希密码
+func HashWithArgon2(password []byte, params *Argon2Params) (string, error) {
+	if params == nil {
+		params = DefaultArgon2Params()
+	}
+
+	// 生成随机salt
+	salt := make([]byte, params.SaltLength)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("生成salt失败: %w", err)
+	}
+
+	// 根据类型选择Argon2变种
+	var hash []byte
+	switch params.Type {
+	case Argon2i:
+		hash = argon2.Key(password, salt, params.Iterations, params.Memory, params.Parallelism, params.KeyLength)
+	default: // Argon2id
+		hash = argon2.IDKey(password, salt, params.Iterations, params.Memory, params.Parallelism, params.KeyLength)
+	}
+
+	// 编码格式: $argon2{type}$v={version}$m={memory},t={iterations},p={parallelism}${salt}${hash}
+	version := 19 // Argon2版本
+	encodedSalt := base64.RawStdEncoding.EncodeToString(salt)
+	encodedHash := base64.RawStdEncoding.EncodeToString(hash)
+
+	typeStr := "id"
+	if params.Type == Argon2i {
+		typeStr = "i"
+	}
+
+	return fmt.Sprintf("$argon2%s$v=%d$m=%d,t=%d,p=%d$%s$%s",
+		typeStr, version, params.Memory, params.Iterations, params.Parallelism, encodedSalt, encodedHash), nil
+}
+
+// VerifyArgon2Hash 验证Argon2哈希
+func VerifyArgon2Hash(hash, password []byte) (bool, error) {
+	// 解析哈希字符串
+	parts := strings.Split(string(hash), "$")
+	if len(parts) != 6 {
+		return false, errors.New("无效的Argon2哈希格式")
+	}
+
+	// 解析参数
+	var argonType Argon2Type = Argon2id
+	if parts[1] == "argon2i" {
+		argonType = Argon2i
+	}
+
+	var memory, iterations, parallelism uint32
+	var salt, key []byte
+	var version int
+
+	_, err := fmt.Sscanf(parts[2], "v=%d", &version)
+	if err != nil || version != 19 {
+		return false, errors.New("不支持的Argon2版本")
+	}
+
+	_, err = fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &iterations, &parallelism)
+	if err != nil {
+		return false, fmt.Errorf("解析参数失败: %w", err)
+	}
+
+	// 解码salt和hash
+	salt, err = base64.RawStdEncoding.DecodeString(parts[4])
+	if err != nil {
+		return false, fmt.Errorf("解码salt失败: %w", err)
+	}
+
+	key, err = base64.RawStdEncoding.DecodeString(parts[5])
+	if err != nil {
+		return false, fmt.Errorf("解码hash失败: %w", err)
+	}
+
+	// 使用相同参数重新计算哈希
+	var computedHash []byte
+	if argonType == Argon2i {
+		computedHash = argon2.Key(password, salt, iterations, memory, uint8(parallelism), uint32(len(key)))
+	} else {
+		computedHash = argon2.IDKey(password, salt, iterations, memory, uint8(parallelism), uint32(len(key)))
+	}
+
+	// 安全比较
+	return SecureCompare(key, computedHash), nil
+}
+
+// ScryptParams scrypt参数配置
+type ScryptParams struct {
+	// CPU/内存成本参数
+	N int
+	// 块大小参数
+	R int
+	// 并行化参数
+	P int
+	// Salt长度
+	SaltLength int
+	// Key长度
+	KeyLength int
+}
+
+// DefaultScryptParams 返回推荐的scrypt参数
+func DefaultScryptParams() *ScryptParams {
+	return &ScryptParams{
+		N:          32768,  // 2^15
+		R:          8,       // 块大小
+		P:          1,       // 并行化
+		SaltLength: 16,      // salt长度
+		KeyLength:  32,      // 输出key长度
+	}
+}
+
+// FastScryptParams 返回快速但安全的scrypt参数
+func FastScryptParams() *ScryptParams {
+	return &ScryptParams{
+		N:          16384,  // 2^14
+		R:          8,
+		P:          1,
+		SaltLength: 16,
+		KeyLength:  32,
+	}
+}
+
+// HashWithScrypt 使用scrypt算法哈希密码
+func HashWithScrypt(password []byte, params *ScryptParams) (string, error) {
+	if params == nil {
+		params = DefaultScryptParams()
+	}
+
+	// 生成随机salt
+	salt := make([]byte, params.SaltLength)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("生成salt失败: %w", err)
+	}
+
+	// 使用scrypt生成key
+	key, err := scrypt.Key(password, salt, params.N, params.R, params.P, params.KeyLength)
+	if err != nil {
+		return "", fmt.Errorf("scrypt计算失败: %w", err)
+	}
+
+	// 编码格式: $scrypt$N={n},r={r},p={p}${salt}${hash}
+	encodedSalt := base64.RawStdEncoding.EncodeToString(salt)
+	encodedKey := base64.RawStdEncoding.EncodeToString(key)
+
+	return fmt.Sprintf("$scrypt$N=%d,r=%d,p=%d$%s$%s",
+		params.N, params.R, params.P, encodedSalt, encodedKey), nil
+}
+
+// VerifyScryptHash 验证scrypt哈希
+func VerifyScryptHash(hash, password []byte) (bool, error) {
+	// 解析哈希字符串
+	parts := strings.Split(string(hash), "$")
+	if len(parts) != 5 || parts[1] != "scrypt" {
+		return false, errors.New("无效的scrypt哈希格式")
+	}
+
+	// 解析参数
+	var N, R, P int
+	var salt, key []byte
+
+	_, err := fmt.Sscanf(parts[2], "N=%d,r=%d,p=%d", &N, &R, &P)
+	if err != nil {
+		return false, fmt.Errorf("解析参数失败: %w", err)
+	}
+
+	// 解码salt和hash
+	salt, err = base64.RawStdEncoding.DecodeString(parts[3])
+	if err != nil {
+		return false, fmt.Errorf("解码salt失败: %w", err)
+	}
+
+	key, err = base64.RawStdEncoding.DecodeString(parts[4])
+	if err != nil {
+		return false, fmt.Errorf("解码hash失败: %w", err)
+	}
+
+	// 使用相同参数重新计算哈希
+	computedKey, err := scrypt.Key(password, salt, N, R, P, len(key))
+	if err != nil {
+		return false, fmt.Errorf("scrypt计算失败: %w", err)
+	}
+
+	// 安全比较
+	return SecureCompare(key, computedKey), nil
+}
+
+// PasswordHasher 密码哈希器接口
+type PasswordHasher interface {
+	Hash(password []byte) (string, error)
+	Verify(hash, password []byte) (bool, error)
+}
+
+// BcryptHasher bcrypt哈希器
+type BcryptHasher struct {
+	cost BcryptCost
+}
+
+// NewBcryptHasher 创建bcrypt哈希器
+func NewBcryptHasher(cost BcryptCost) *BcryptHasher {
+	return &BcryptHasher{cost: cost}
+}
+
+// Hash 使用bcrypt哈希密码
+func (b *BcryptHasher) Hash(password []byte) (string, error) {
+	hashed, err := HashPasswordWithCost(password, b.cost)
+	if err != nil {
+		return "", err
+	}
+	return string(hashed), nil
+}
+
+// Verify 验证bcrypt哈希
+func (b *BcryptHasher) Verify(hash, password []byte) (bool, error) {
+	err := CompareHashAndPassword(hash, password)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+		return false, nil
+	}
+	return false, err
+}
+
+// Argon2Hasher Argon2哈希器
+type Argon2Hasher struct {
+	params *Argon2Params
+}
+
+// NewArgon2Hasher 创建Argon2哈希器
+func NewArgon2Hasher(params *Argon2Params) *Argon2Hasher {
+	if params == nil {
+		params = DefaultArgon2Params()
+	}
+	return &Argon2Hasher{params: params}
+}
+
+// Hash 使用Argon2哈希密码
+func (a *Argon2Hasher) Hash(password []byte) (string, error) {
+	return HashWithArgon2(password, a.params)
+}
+
+// Verify 验证Argon2哈希
+func (a *Argon2Hasher) Verify(hash, password []byte) (bool, error) {
+	return VerifyArgon2Hash(hash, password)
+}
+
+// ScryptHasher scrypt哈希器
+type ScryptHasher struct {
+	params *ScryptParams
+}
+
+// NewScryptHasher 创建scrypt哈希器
+func NewScryptHasher(params *ScryptParams) *ScryptHasher {
+	if params == nil {
+		params = DefaultScryptParams()
+	}
+	return &ScryptHasher{params: params}
+}
+
+// Hash 使用scrypt哈希密码
+func (s *ScryptHasher) Hash(password []byte) (string, error) {
+	return HashWithScrypt(password, s.params)
+}
+
+// Verify 验证scrypt哈希
+func (s *ScryptHasher) Verify(hash, password []byte) (bool, error) {
+	return VerifyScryptHash(hash, password)
+}
+
+// BenchmarkPasswordHashers 性能测试不同的密码哈希算法
+// 返回每个算法的耗时（纳秒）
+func BenchmarkPasswordHashers(password []byte, iterations int) map[string]time.Duration {
+	results := make(map[string]time.Duration)
+	
+	// 测试bcrypt
+	start := time.Now()
+	for i := 0; i < iterations; i++ {
+		HashPasswordWithCost(password, BcryptCostDefault)
+	}
+	results["bcrypt"] = time.Since(start)
+	
+	// 测试Argon2
+	argonParams := DefaultArgon2Params()
+	start = time.Now()
+	for i := 0; i < iterations; i++ {
+		HashWithArgon2(password, argonParams)
+	}
+	results["argon2"] = time.Since(start)
+	
+	// 测试快速Argon2
+	fastArgonParams := FastArgon2Params()
+	start = time.Now()
+	for i := 0; i < iterations; i++ {
+		HashWithArgon2(password, fastArgonParams)
+	}
+	results["argon2-fast"] = time.Since(start)
+	
+	// 测试scrypt
+	scryptParams := DefaultScryptParams()
+	start = time.Now()
+	for i := 0; i < iterations; i++ {
+		HashWithScrypt(password, scryptParams)
+	}
+	results["scrypt"] = time.Since(start)
+	
+	// 测试快速scrypt
+	fastScryptParams := FastScryptParams()
+	start = time.Now()
+	for i := 0; i < iterations; i++ {
+		HashWithScrypt(password, fastScryptParams)
+	}
+	results["scrypt-fast"] = time.Since(start)
+	
+	return results
 }
