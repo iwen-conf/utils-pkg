@@ -1,5 +1,5 @@
 package utils_pkg
 
 func Version() string {
-	return "v0.1.80"
+	return "v0.1.81"
 }
