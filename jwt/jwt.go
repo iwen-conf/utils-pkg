@@ -672,3 +672,26 @@ func (m *TokenManager) GetCacheSize() int {
 	defer m.cacheLock.RUnlock()
 	return len(m.cache)
 }
+
+// GetTokenExpiryConfig 返回当前配置的JWT选项
+func (m *TokenManager) GetTokenExpiryConfig() *JWTOptions {
+	return &JWTOptions{
+		EnableLog:              m.enableLog,
+		BlacklistCleanInterval: 10 * time.Minute, // 使用默认值，因为TokenManager中没有存储此值
+		EnableCache:            m.enableCache,
+		CacheSize:              m.cacheSize,
+		CacheTTL:               m.cacheTTL,
+		AccessTokenExpiry:      m.accessTokenExpiry,
+		RefreshTokenExpiry:     m.refreshTokenExpiry,
+	}
+}
+
+// GetAccessTokenExpiry 返回访问令牌过期时间
+func (m *TokenManager) GetAccessTokenExpiry() time.Duration {
+	return m.accessTokenExpiry
+}
+
+// GetRefreshTokenExpiry 返回刷新令牌过期时间
+func (m *TokenManager) GetRefreshTokenExpiry() time.Duration {
+	return m.refreshTokenExpiry
+}

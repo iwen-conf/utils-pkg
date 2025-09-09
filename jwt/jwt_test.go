@@ -340,3 +340,152 @@ func TestTokenManager_LogControl(t *testing.T) {
 		t.Error("使用EnableLog方法应成功启用日志")
 	}
 }
+
+// TestTokenManager_GetTokenExpiryConfig 测试获取JWT选项配置
+func TestTokenManager_GetTokenExpiryConfig(t *testing.T) {
+	// 测试默认配置
+	manager1 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
+	config1 := manager1.GetTokenExpiryConfig()
+
+	defaultOptions := DefaultJWTOptions()
+
+	if config1.AccessTokenExpiry != defaultOptions.AccessTokenExpiry {
+		t.Errorf("默认配置下，期望访问令牌过期时间为 %v，实际得到 %v", defaultOptions.AccessTokenExpiry, config1.AccessTokenExpiry)
+	}
+
+	if config1.RefreshTokenExpiry != defaultOptions.RefreshTokenExpiry {
+		t.Errorf("默认配置下，期望刷新令牌过期时间为 %v，实际得到 %v", defaultOptions.RefreshTokenExpiry, config1.RefreshTokenExpiry)
+	}
+
+	if config1.EnableLog != defaultOptions.EnableLog {
+		t.Errorf("默认配置下，期望EnableLog为 %v，实际得到 %v", defaultOptions.EnableLog, config1.EnableLog)
+	}
+
+	if config1.EnableCache != defaultOptions.EnableCache {
+		t.Errorf("默认配置下，期望EnableCache为 %v，实际得到 %v", defaultOptions.EnableCache, config1.EnableCache)
+	}
+
+	if config1.CacheSize != defaultOptions.CacheSize {
+		t.Errorf("默认配置下，期望CacheSize为 %v，实际得到 %v", defaultOptions.CacheSize, config1.CacheSize)
+	}
+
+	if config1.CacheTTL != defaultOptions.CacheTTL {
+		t.Errorf("默认配置下，期望CacheTTL为 %v，实际得到 %v", defaultOptions.CacheTTL, config1.CacheTTL)
+	}
+
+	// 测试自定义配置
+	customOptions := &JWTOptions{
+		EnableLog:              true,
+		EnableCache:            false,
+		CacheSize:              500,
+		CacheTTL:               3 * time.Minute,
+		AccessTokenExpiry:      30 * time.Minute,
+		RefreshTokenExpiry:     7 * 24 * time.Hour, // 7天
+		BlacklistCleanInterval: 5 * time.Minute,
+	}
+	manager2 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!", customOptions)
+	config2 := manager2.GetTokenExpiryConfig()
+
+	if config2.AccessTokenExpiry != customOptions.AccessTokenExpiry {
+		t.Errorf("自定义配置下，期望访问令牌过期时间为 %v，实际得到 %v", customOptions.AccessTokenExpiry, config2.AccessTokenExpiry)
+	}
+
+	if config2.RefreshTokenExpiry != customOptions.RefreshTokenExpiry {
+		t.Errorf("自定义配置下，期望刷新令牌过期时间为 %v，实际得到 %v", customOptions.RefreshTokenExpiry, config2.RefreshTokenExpiry)
+	}
+
+	if config2.EnableLog != customOptions.EnableLog {
+		t.Errorf("自定义配置下，期望EnableLog为 %v，实际得到 %v", customOptions.EnableLog, config2.EnableLog)
+	}
+
+	if config2.EnableCache != customOptions.EnableCache {
+		t.Errorf("自定义配置下，期望EnableCache为 %v，实际得到 %v", customOptions.EnableCache, config2.EnableCache)
+	}
+
+	if config2.CacheSize != customOptions.CacheSize {
+		t.Errorf("自定义配置下，期望CacheSize为 %v，实际得到 %v", customOptions.CacheSize, config2.CacheSize)
+	}
+
+	if config2.CacheTTL != customOptions.CacheTTL {
+		t.Errorf("自定义配置下，期望CacheTTL为 %v，实际得到 %v", customOptions.CacheTTL, config2.CacheTTL)
+	}
+
+	// 测试通过SetTokenExpiry方法修改配置
+	manager3 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
+	manager3.SetTokenExpiry(AccessToken, 1*time.Hour)
+	manager3.SetTokenExpiry(RefreshToken, 48*time.Hour)
+
+	config3 := manager3.GetTokenExpiryConfig()
+
+	if config3.AccessTokenExpiry != 1*time.Hour {
+		t.Errorf("通过SetTokenExpiry修改后，期望访问令牌过期时间为 %v，实际得到 %v", 1*time.Hour, config3.AccessTokenExpiry)
+	}
+
+	if config3.RefreshTokenExpiry != 48*time.Hour {
+		t.Errorf("通过SetTokenExpiry修改后，期望刷新令牌过期时间为 %v，实际得到 %v", 48*time.Hour, config3.RefreshTokenExpiry)
+	}
+}
+
+// TestTokenManager_GetAccessTokenExpiry 测试获取访问令牌过期时间
+func TestTokenManager_GetAccessTokenExpiry(t *testing.T) {
+	// 测试默认配置
+	manager1 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
+	expiry1 := manager1.GetAccessTokenExpiry()
+	
+	expectedExpiry := DefaultJWTOptions().AccessTokenExpiry
+	if expiry1 != expectedExpiry {
+		t.Errorf("默认配置下，期望访问令牌过期时间为 %v，实际得到 %v", expectedExpiry, expiry1)
+	}
+
+	// 测试自定义配置
+	customOptions := &JWTOptions{
+		AccessTokenExpiry: 45 * time.Minute,
+	}
+	manager2 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!", customOptions)
+	expiry2 := manager2.GetAccessTokenExpiry()
+	
+	if expiry2 != customOptions.AccessTokenExpiry {
+		t.Errorf("自定义配置下，期望访问令牌过期时间为 %v，实际得到 %v", customOptions.AccessTokenExpiry, expiry2)
+	}
+
+	// 测试通过SetTokenExpiry修改
+	manager3 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
+	manager3.SetTokenExpiry(AccessToken, 2*time.Hour)
+	expiry3 := manager3.GetAccessTokenExpiry()
+	
+	if expiry3 != 2*time.Hour {
+		t.Errorf("通过SetTokenExpiry修改后，期望访问令牌过期时间为 %v，实际得到 %v", 2*time.Hour, expiry3)
+	}
+}
+
+// TestTokenManager_GetRefreshTokenExpiry 测试获取刷新令牌过期时间
+func TestTokenManager_GetRefreshTokenExpiry(t *testing.T) {
+	// 测试默认配置
+	manager1 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
+	expiry1 := manager1.GetRefreshTokenExpiry()
+	
+	expectedExpiry := DefaultJWTOptions().RefreshTokenExpiry
+	if expiry1 != expectedExpiry {
+		t.Errorf("默认配置下，期望刷新令牌过期时间为 %v，实际得到 %v", expectedExpiry, expiry1)
+	}
+
+	// 测试自定义配置
+	customOptions := &JWTOptions{
+		RefreshTokenExpiry: 3 * 24 * time.Hour, // 3天
+	}
+	manager2 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!", customOptions)
+	expiry2 := manager2.GetRefreshTokenExpiry()
+	
+	if expiry2 != customOptions.RefreshTokenExpiry {
+		t.Errorf("自定义配置下，期望刷新令牌过期时间为 %v，实际得到 %v", customOptions.RefreshTokenExpiry, expiry2)
+	}
+
+	// 测试通过SetTokenExpiry修改
+	manager3 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
+	manager3.SetTokenExpiry(RefreshToken, 72*time.Hour)
+	expiry3 := manager3.GetRefreshTokenExpiry()
+	
+	if expiry3 != 72*time.Hour {
+		t.Errorf("通过SetTokenExpiry修改后，期望刷新令牌过期时间为 %v，实际得到 %v", 72*time.Hour, expiry3)
+	}
+}
