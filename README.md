@@ -30,7 +30,7 @@
    - 操作系统识别
    - 设备类型判断
 
-6. **errors**: 通用错误处理系统 ✨ **新增**
+6. **errors**: 通用错误处理系统
    - 灵活的错误码注册系统
    - 支持动态错误码管理
    - 错误分类和判断（系统、客户端、业务）
@@ -40,10 +40,64 @@
    - 错误聚合器
    - 完整的堆栈跟踪支持
 
+7. **captcha**: 验证码生成器 ✨ **新增**
+   - 密码学安全的随机数生成(CSPRNG)
+   - 纯数字字符集，避免用户输入混淆
+   - 推荐6位长度，平衡安全性和用户体验
+   - 支持4-12位长度的灵活配置
+   - 简单的验证码匹配功能
+   - 格式验证和自定义字符集支持
+
 ## 安装
 
 ```bash
 go get github.com/iwen-conf/utils-pkg
+```
+
+## 验证码生成器使用示例
+
+### 基础用法
+
+```go
+import "github.com/iwen-conf/utils-pkg/captcha"
+
+// 生成推荐的6位验证码
+code, err := captcha.Generate6()
+if err != nil {
+    panic(err)
+}
+fmt.Printf("验证码: %s\n", code)
+
+// 生成自定义长度的验证码
+code8, err := captcha.Generate(8)
+if err != nil {
+    panic(err)
+}
+
+// 验证验证码
+userInput := "123456"
+if captcha.Validate(userInput, code) {
+    fmt.Println("验证码正确")
+} else {
+    fmt.Println("验证码错误")
+}
+```
+
+### 安全特性
+
+```go
+// 使用密码学安全的随机数生成器
+code, err := captcha.Generate6() // 使用crypto/rand
+
+// 格式验证
+if captcha.IsValidFormat(userInput) {
+    // 验证码格式正确
+}
+
+// 不同长度的验证码
+code4, _ := captcha.Generate4()  // 4位，1万种组合
+code6, _ := captcha.Generate6()  // 6位，100万种组合（推荐）
+code8, _ := captcha.Generate8()  // 8位，1亿种组合
 ```
 
 ## 错误处理模块使用示例
@@ -174,7 +228,8 @@ if aggregator.HasErrors() {
 - [切片工具使用说明](slice/使用说明.md)
 - [URL工具使用说明](url/使用说明.md)
 - [用户代理解析工具使用说明](useragent/使用说明.md)
-- [错误处理系统使用说明](errors/使用说明.md) ✨ **新增**
+- [错误处理系统使用说明](errors/使用说明.md)
+- [验证码生成器使用说明](captcha/使用说明.md) ✨ **新增**
 
 ## 特性
 
