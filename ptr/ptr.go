@@ -2,7 +2,13 @@
 // 当您需要向函数传递指针但只有值时，这非常有用。
 package ptr
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+// ErrNilPointer 当尝试解引用空指针时返回。
+var ErrNilPointer = errors.New("指针为空")
 
 // String 返回给定字符串值的指针。
 func String(s string) *string {
