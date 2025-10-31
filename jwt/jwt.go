@@ -31,6 +31,8 @@ type StandardClaims struct {
 	SessionID string `json:"sid,omitempty"`
 	// 令牌ID
 	TokenID string `json:"jti,omitempty"`
+	// 用户角色
+	Role string `json:"role,omitempty"`
 }
 
 // TokenOptions JWT令牌选项
@@ -43,6 +45,8 @@ type TokenOptions struct {
 	SessionID string
 	// 令牌ID，默认会自动生成
 	TokenID string
+	// 用户角色
+	Role string
 	// 其他自定义声明
 	CustomClaims map[string]interface{}
 }
@@ -312,6 +316,7 @@ func (m *TokenManager) GenerateToken(subject string, options ...*TokenOptions) (
 		TokenType: tokenType,
 		SessionID: opts.SessionID,
 		TokenID:   tokenID,
+		Role:      opts.Role,
 	}
 
 	// 添加自定义声明
@@ -415,6 +420,7 @@ func (m *TokenManager) RefreshToken(refreshTokenStr string) (accessToken string,
 	options := &TokenOptions{
 		TokenType: AccessToken,
 		SessionID: claims.SessionID,
+		Role:      claims.Role,
 	}
 
 	accessToken, err = m.GenerateToken(claims.Subject, options)
