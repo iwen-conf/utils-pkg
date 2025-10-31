@@ -74,25 +74,6 @@ func TestTokenManager_GenerateToken(t *testing.T) {
 	if claims.SessionID != "test-session" {
 		t.Errorf("Expected session ID %s, got %s", "test-session", claims.SessionID)
 	}
-
-	// 测试带角色的令牌
-	roleOptions := &TokenOptions{
-		TokenType: AccessToken,
-		Role:      "admin",
-	}
-	roleToken, err := manager.GenerateToken(subject, roleOptions)
-	if err != nil {
-		t.Fatalf("Failed to generate token with role: %v", err)
-	}
-
-	// 验证带角色的令牌
-	roleClaims, err := manager.ValidateToken(roleToken)
-	if err != nil {
-		t.Fatalf("Failed to validate token with role: %v", err)
-	}
-	if roleClaims.Role != "admin" {
-		t.Errorf("Expected role %s, got %s", "admin", roleClaims.Role)
-	}
 }
 
 func TestTokenManager_ValidateToken(t *testing.T) {
@@ -102,7 +83,6 @@ func TestTokenManager_ValidateToken(t *testing.T) {
 	options := &TokenOptions{
 		TokenType: AccessToken,
 		SessionID: "test-session",
-		Role:      "admin",
 		CustomClaims: map[string]interface{}{
 			"department": "engineering",
 		},
@@ -130,9 +110,6 @@ func TestTokenManager_ValidateToken(t *testing.T) {
 	if claims.SessionID != "test-session" {
 		t.Errorf("Expected session ID %s, got %s", "test-session", claims.SessionID)
 	}
-	if claims.Role != "admin" {
-		t.Errorf("Expected role %s, got %s", "admin", claims.Role)
-	}
 
 	// 测试无效 token
 	_, err = manager.ValidateToken("invalid-token")
@@ -146,11 +123,10 @@ func TestTokenManager_RefreshToken(t *testing.T) {
 	subject := "123"
 	sessionID := "test-session"
 
-	// 生成刷新令牌（带角色）
+	// 生成刷新令牌
 	refreshOptions := &TokenOptions{
 		TokenType: RefreshToken,
 		SessionID: sessionID,
-		Role:      "user",
 	}
 	refreshToken, err := manager.GenerateToken(subject, refreshOptions)
 	if err != nil {
@@ -184,102 +160,12 @@ func TestTokenManager_RefreshToken(t *testing.T) {
 	if claims.SessionID != sessionID {
 		t.Errorf("Expected session ID %s, got %s", sessionID, claims.SessionID)
 	}
-	// 验证角色在刷新后被保留
-	if claims.Role != "user" {
-		t.Errorf("Expected role %s, got %s", "user", claims.Role)
-	}
 
 	// 尝试使用访问令牌作为刷新令牌 (应该失败)
 	_, _, err = manager.RefreshToken(accessToken)
 	if err == nil {
 		t.Error("Using access token as refresh token should fail")
 	}
-}
-
-func TestTokenManager_TokenWithRole(t *testing.T) {
-	manager := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
-	subject := "user123"
-
-	tests := []struct {
-		name         string
-		role         string
-		expectedRole string
-	}{
-		{
-			name:         "管理员角色",
-			role:         "admin",
-			expectedRole: "admin",
-		},
-		{
-			name:         "普通用户角色",
-			role:         "user",
-			expectedRole: "user",
-		},
-		{
-			name:         "访客角色",
-			role:         "guest",
-			expectedRole: "guest",
-		},
-		{
-			name:         "空角色",
-			role:         "",
-			expectedRole: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// 生成带角色的令牌
-			options := &TokenOptions{
-				TokenType: AccessToken,
-				Role:      tt.role,
-			}
-			token, err := manager.GenerateToken(subject, options)
-			if err != nil {
-				t.Fatalf("Failed to generate token: %v", err)
-			}
-
-			// 验证令牌并检查角色
-			claims, err := manager.ValidateToken(token)
-			if err != nil {
-				t.Fatalf("Failed to validate token: %v", err)
-			}
-
-			if claims.Role != tt.expectedRole {
-				t.Errorf("Expected role %s, got %s", tt.expectedRole, claims.Role)
-			}
-		})
-	}
-
-	// 测试刷新令牌时角色保留
-	t.Run("刷新令牌时保留角色", func(t *testing.T) {
-		// 生成带角色的刷新令牌
-		refreshOptions := &TokenOptions{
-			TokenType: RefreshToken,
-			Role:      "premium_user",
-			SessionID: "session-123",
-		}
-		refreshToken, err := manager.GenerateToken(subject, refreshOptions)
-		if err != nil {
-			t.Fatalf("Failed to generate refresh token: %v", err)
-		}
-
-		// 刷新令牌
-		accessToken, _, err := manager.RefreshToken(refreshToken)
-		if err != nil {
-			t.Fatalf("Failed to refresh token: %v", err)
-		}
-
-		// 验证新的访问令牌保留了角色
-		claims, err := manager.ValidateToken(accessToken)
-		if err != nil {
-			t.Fatalf("Failed to validate access token: %v", err)
-		}
-
-		if claims.Role != "premium_user" {
-			t.Errorf("Expected role to be preserved after refresh, expected %s, got %s", "premium_user", claims.Role)
-		}
-	})
 }
 
 func TestTokenManager_RevokeToken(t *testing.T) {
@@ -359,7 +245,6 @@ func TestTokenManager_ValidateToken_Parallel(t *testing.T) {
 			subject: "123",
 			options: &TokenOptions{
 				TokenType:    AccessToken,
-				Role:         "user",
 				CustomClaims: map[string]interface{}{"department": "sales"},
 			},
 			wantErr: false,
