@@ -1,6 +1,7 @@
 package errors
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 )
@@ -22,23 +23,31 @@ type RichError struct {
 
 // Error 实现标准 error 接口
 func (e *RichError) Error() string {
-	// 默认只打印业务信息
+	if e == nil {
+		return ""
+	}
 	return fmt.Sprintf("code=%d msg=%s", e.Code, e.Msg)
 }
 
 // Unwrap 实现 Go 1.13 标准，允许 errors.Is/As 穿透
 func (e *RichError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
 	return e.cause
 }
 
 // Cause 返回根因错误（用于内部调试）
 func (e *RichError) Cause() error {
+	if e == nil {
+		return nil
+	}
 	return e.cause
 }
 
 // Stack 返回堆栈信息的字符串表示（用于日志输出）
 func (e *RichError) Stack() string {
-	if e.stack == nil {
+	if e == nil || e.stack == nil {
 		return ""
 	}
 	return fmt.Sprintf("%+v", e.stack)
@@ -47,6 +56,10 @@ func (e *RichError) Stack() string {
 // Format 实现 fmt.Formatter，支持 %+v 打印详细堆栈
 // 使用: logger.Errorf("%+v", err)
 func (e *RichError) Format(s fmt.State, verb rune) {
+	if e == nil {
+		io.WriteString(s, "<nil>")
+		return
+	}
 	switch verb {
 	case 'v':
 		if s.Flag('+') {
@@ -72,5 +85,32 @@ func (e *RichError) Format(s fmt.State, verb rune) {
 
 // GetStatus 返回 Status 结构体（便于 Controller 层使用）
 func (e *RichError) GetStatus() Status {
+	if e == nil {
+		return Status{Code: RichCodeInternal, Msg: RichMsgInternal}
+	}
 	return e.Status
+}
+
+// MarshalJSON 实现 JSON 序列化，用于日志输出
+// 输出格式: {"code":500001,"msg":"xxx","cause":"原始错误"}
+func (e *RichError) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return []byte("null"), nil
+	}
+
+	type jsonError struct {
+		Code  int    `json:"code"`
+		Msg   string `json:"msg"`
+		Cause string `json:"cause,omitempty"`
+	}
+
+	je := jsonError{
+		Code: e.Code,
+		Msg:  e.Msg,
+	}
+	if e.cause != nil {
+		je.Cause = e.cause.Error()
+	}
+
+	return json.Marshal(je)
 }

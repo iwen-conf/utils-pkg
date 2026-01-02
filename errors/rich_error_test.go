@@ -172,3 +172,95 @@ func TestIsRichErrorCode(t *testing.T) {
 		t.Error("should return false for non-RichError")
 	}
 }
+
+// ==================== 新功能测试 ====================
+
+func TestNewRichNoStack(t *testing.T) {
+	e := NewRichNoStack(400001, "无堆栈错误")
+
+	if e.Code != 400001 {
+		t.Errorf("expected Code=400001, got %d", e.Code)
+	}
+	if e.stack != nil {
+		t.Error("NewRichNoStack should not have stack")
+	}
+	if e.Stack() != "" {
+		t.Error("Stack() should return empty string")
+	}
+}
+
+func TestWrapRichNoStack(t *testing.T) {
+	originalErr := errors.New("original")
+	e := WrapRichNoStack(originalErr, 500001, "包装错误")
+
+	if e.Code != 500001 {
+		t.Errorf("expected Code=500001, got %d", e.Code)
+	}
+	if e.stack != nil {
+		t.Error("WrapRichNoStack should not have stack")
+	}
+	if e.Unwrap() != originalErr {
+		t.Error("Unwrap should return original error")
+	}
+}
+
+func TestMarshalJSON(t *testing.T) {
+	e := WrapRich(errors.New("db error"), 500001, "数据库错误")
+
+	data, err := e.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON failed: %v", err)
+	}
+
+	jsonStr := string(data)
+	if !strings.Contains(jsonStr, `"code":500001`) {
+		t.Errorf("JSON should contain code, got: %s", jsonStr)
+	}
+	if !strings.Contains(jsonStr, `"msg":"数据库错误"`) {
+		t.Errorf("JSON should contain msg, got: %s", jsonStr)
+	}
+	if !strings.Contains(jsonStr, `"cause":"db error"`) {
+		t.Errorf("JSON should contain cause, got: %s", jsonStr)
+	}
+}
+
+func TestNilSafe(t *testing.T) {
+	var e *RichError = nil
+
+	// 所有方法都应该 nil 安全
+	if e.Error() != "" {
+		t.Error("nil.Error() should return empty string")
+	}
+	if e.Unwrap() != nil {
+		t.Error("nil.Unwrap() should return nil")
+	}
+	if e.Cause() != nil {
+		t.Error("nil.Cause() should return nil")
+	}
+	if e.Stack() != "" {
+		t.Error("nil.Stack() should return empty string")
+	}
+	if e.HTTPStatus() != 200 {
+		t.Errorf("nil.HTTPStatus() should return 200, got %d", e.HTTPStatus())
+	}
+
+	status := e.GetStatus()
+	if status.Code != RichCodeInternal {
+		t.Errorf("nil.GetStatus().Code should be %d, got %d", RichCodeInternal, status.Code)
+	}
+
+	// Format nil
+	s := fmt.Sprintf("%v", e)
+	if s != "<nil>" {
+		t.Errorf("nil Format should be <nil>, got: %s", s)
+	}
+
+	// MarshalJSON nil
+	data, err := e.MarshalJSON()
+	if err != nil {
+		t.Fatalf("nil.MarshalJSON() failed: %v", err)
+	}
+	if string(data) != "null" {
+		t.Errorf("nil.MarshalJSON() should be null, got: %s", string(data))
+	}
+}

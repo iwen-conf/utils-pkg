@@ -52,6 +52,19 @@ func NewRich(code int, msg string) *RichError {
 	}
 }
 
+// NewRichNoStack 创建不捕获堆栈的业务错误（高性能场景）
+// 适用：不需要堆栈跟踪的简单业务错误，如参数校验
+func NewRichNoStack(code int, msg string) *RichError {
+	return &RichError{
+		Status: Status{
+			Code: code,
+			Msg:  msg,
+		},
+		cause: nil,
+		stack: nil, // 不捕获堆栈
+	}
+}
+
 // WrapRich 包装一个底层错误 (Repo 层使用)
 // 场景：数据库报错、第三方 API 报错
 // 作用：把脏错误藏在 cause 里，给外面返回一个干净的 code/msg
@@ -72,6 +85,27 @@ func WrapRich(err error, code int, format string, args ...interface{}) *RichErro
 		},
 		cause: err,
 		stack: callers(),
+	}
+}
+
+// WrapRichNoStack 包装错误但不捕获堆栈（高性能场景）
+func WrapRichNoStack(err error, code int, format string, args ...interface{}) *RichError {
+	if err == nil {
+		return nil
+	}
+
+	msg := format
+	if len(args) > 0 {
+		msg = fmt.Sprintf(format, args...)
+	}
+
+	return &RichError{
+		Status: Status{
+			Code: code,
+			Msg:  msg,
+		},
+		cause: err,
+		stack: nil, // 不捕获堆栈
 	}
 }
 
@@ -103,7 +137,7 @@ func FromRichError(err error) *RichError {
 // HTTPStatus 根据业务码自动推导 HTTP 状态码
 // 规则：取业务码前3位作为 HTTP 状态码，0 返回 200
 func (e *RichError) HTTPStatus() int {
-	if e.Code == 0 {
+	if e == nil || e.Code == 0 {
 		return 200
 	}
 	// 取前3位：500001 -> 500, 404001 -> 404
