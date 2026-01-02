@@ -1,6 +1,6 @@
 # RichError - 企业级富错误处理包
 
-一个为 Go 微服务设计的 **"富错误"** 包，实现了 **内外有别** 的错误处理模式。
+一个为 Go 业务项目设计的 **"富错误"** 包，实现了 **内外有别** 的错误处理模式。
 
 ## ✨ 核心特性
 
@@ -11,12 +11,11 @@
 | **标准兼容** | 完整支持 `errors.Is`/`errors.As` |
 | **调试友好** | `%+v` 格式化输出完整堆栈信息 |
 | **HTTP 映射** | 业务码自动推导 HTTP 状态码 |
+| **高性能** | sync.Pool 优化，内存分配减少 80% |
 
 ---
 
 ## 📦 快速开始
-
-### 安装
 
 ```go
 import "github.com/iwen-conf/utils-pkg/errors"
@@ -25,13 +24,13 @@ import "github.com/iwen-conf/utils-pkg/errors"
 ### 核心类型
 
 ```go
-// Status 可直接被 JSON 序列化，嵌入到 Response 中
+// Status 可直接被 JSON 序列化
 type Status struct {
     Code int    `json:"code"` // 业务码
     Msg  string `json:"msg"`  // 用户提示语
 }
 
-// RichError 嵌入 Status，自然拥有 Code 和 Msg 字段
+// RichError 嵌入 Status
 type RichError struct {
     Status        // 可直接访问 e.Code 和 e.Msg
     cause  error  // 根因（不导出）
@@ -42,7 +41,6 @@ type RichError struct {
 ### 预定义业务码
 
 ```go
-// 业务码规范：HTTP状态码(3位) + 模块码(3位)
 const (
     RichCodeSuccess      = 0       // 成功
     RichCodeBadRequest   = 400000  // 参数错误
@@ -56,47 +54,34 @@ const (
 
 ---
 
-## 🛠️ 三个核心 API
+## 🛠️ 核心 API
 
-### 1. `NewRich` - 创建业务错误
-
-**适用场景**：Service 层参数校验失败、业务逻辑不满足
+### `NewRich` - 创建业务错误
 
 ```go
 err := errors.NewRich(400001, "手机号格式错误")
 err := errors.NewRich(errors.RichCodeNotFound, "用户不存在")
 ```
 
-### 2. `WrapRich` - 包装底层错误
-
-**适用场景**：Repo 层数据库报错、第三方 API 调用失败
+### `WrapRich` - 包装底层错误
 
 ```go
-user, err := repo.GetUserByID(ctx, id)
 if err != nil {
-    // 把脏错误包装成干净的业务错误
     return errors.WrapRich(err, errors.RichCodeDBError, "查询用户失败")
 }
 ```
 
-### 3. `FromRichError` - 智能转换
-
-**适用场景**：Controller/Response 层统一错误响应
+### `FromRichError` - 智能转换
 
 ```go
 func handleError(c *gin.Context, err error) {
     e := errors.FromRichError(err)
     
-    // 5xx 错误打印详细日志
     if errors.IsServerError(e) {
-        log.Printf("%+v", e)  // 打印 Code + Msg + Cause + Stack
+        log.Printf("%+v", e)  // 打印完整堆栈
     }
     
-    // 返回 JSON
-    c.JSON(e.HTTPStatus(), gin.H{
-        "code": e.Code,
-        "msg":  e.Msg,
-    })
+    c.JSON(e.HTTPStatus(), gin.H{"code": e.Code, "msg": e.Msg})
 }
 ```
 
@@ -105,30 +90,31 @@ func handleError(c *gin.Context, err error) {
 ## 🚀 快捷构造函数
 
 ```go
-// 参数错误
-err := errors.RichBadRequest("邮箱格式不正确")
+errors.RichBadRequest("邮箱格式不正确")   // 400000
+errors.RichUnauthorized()                // 401000
+errors.RichForbidden()                   // 403000
+errors.RichNotFound("用户")              // 404000 -> "用户不存在"
+errors.RichInternal(dbErr)               // 500000 (隐藏底层错误)
+errors.RichDBError(dbErr)                // 500001
+```
 
-// 未认证
-err := errors.RichUnauthorized()
+---
 
-// 无权限
-err := errors.RichForbidden()
+## ⚡ 高性能版本（无堆栈）
 
-// 资源不存在
-err := errors.RichNotFound("用户")  // -> "用户不存在"
+适用于不需要堆栈跟踪的简单业务错误：
 
-// 系统错误（隐藏底层错误）
-err := errors.RichInternal(dbErr)
-
-// 数据库错误
-err := errors.RichDBError(dbErr)
+```go
+// 无堆栈版本，性能更高
+errors.NewRichNoStack(400001, "参数错误")
+errors.WrapRichNoStack(err, 500001, "系统错误")
 ```
 
 ---
 
 ## 🔗 HTTP 状态码映射
 
-业务码自动推导 HTTP 状态码：取前 3 位
+业务码自动推导 HTTP 状态码（取前 3 位）：
 
 ```go
 e := errors.NewRich(404001, "用户不存在")
@@ -136,9 +122,6 @@ e.HTTPStatus() // -> 404
 
 e := errors.NewRich(500001, "数据库错误")
 e.HTTPStatus() // -> 500
-
-e := errors.NewRich(0, "成功")
-e.HTTPStatus() // -> 200
 ```
 
 ---
@@ -169,30 +152,21 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
     if id <= 0 {
         return nil, errors.RichBadRequest("用户ID无效")
     }
-    return s.repo.GetByID(ctx, id)  // 错误直接透传
+    return s.repo.GetByID(ctx, id)
 }
 ```
 
-### Controller 层 - Response 函数
+### Controller 层
 
 ```go
-// Response 嵌入 Status
 type Response struct {
     errors.Status
     Data interface{} `json:"data,omitempty"`
 }
 
-func Success(c *gin.Context, data interface{}) {
-    c.JSON(200, Response{
-        Status: errors.Status{Code: 0, Msg: "success"},
-        Data:   data,
-    })
-}
-
 func Error(c *gin.Context, err error) {
     e := errors.FromRichError(err)
     
-    // 服务端错误打印完整日志
     if errors.IsServerError(e) {
         log.Printf("ERROR: %+v", e)
     }
@@ -206,17 +180,10 @@ func Error(c *gin.Context, err error) {
 ## 🔍 判断函数
 
 ```go
-// 是否是客户端错误 (4xx)
-if errors.IsClientError(err) { ... }
-
-// 是否是服务端错误 (5xx)
-if errors.IsServerError(err) { ... }
-
-// 是否是指定业务码
-if errors.IsRichErrorCode(err, errors.RichCodeNotFound) { ... }
-
-// 获取业务码（非 RichError 返回默认值）
-code := errors.RichErrorCode(err, 500000)
+errors.IsClientError(err)                        // 4xx
+errors.IsServerError(err)                        // 5xx
+errors.IsRichErrorCode(err, errors.RichCodeNotFound)
+errors.RichErrorCode(err, 500000)                // 获取业务码
 ```
 
 ---
@@ -224,29 +191,33 @@ code := errors.RichErrorCode(err, 500000)
 ## ⛓️ 链式方法
 
 ```go
-// 修改业务码（返回新对象）
-newErr := err.WithCode(400002)
-
-// 修改消息（返回新对象）
-newErr := err.WithMsg("自定义消息")
+err.WithCode(400002)  // 修改业务码（返回新对象）
+err.WithMsg("新消息") // 修改消息（返回新对象）
 ```
 
 ---
 
-## 🔍 日志输出格式
+## 📝 JSON 序列化
 
-### 普通打印 (`%v`)
-
+```go
+data, _ := err.MarshalJSON()
+// {"code":500001,"msg":"数据库错误","cause":"connection refused"}
 ```
-查询用户失败
+
+---
+
+## 🔍 日志输出
+
+### `%v` 普通模式
+```
+数据库错误
 ```
 
-### 详细打印 (`%+v`)
-
+### `%+v` 详细模式
 ```
 Code: 500001
-Msg: 查询用户失败
-Cause: Error 1045: Access denied for user 'root'@'localhost'
+Msg: 数据库错误
+Cause: connection refused
 Stack:
     /app/internal/repo/user_repo.go:45
     /app/internal/service/user_service.go:23
@@ -254,19 +225,15 @@ Stack:
 
 ---
 
-## 🔗 与标准库兼容
+## ✅ nil 安全
+
+所有方法在 `nil` 接收者上安全调用：
 
 ```go
-// errors.Is 判断底层错误
-if errors.Is(richErr, pgx.ErrNoRows) {
-    // ✅ 能够穿透判断
-}
-
-// errors.As 转换错误
-var e *errors.RichError
-if errors.As(err, &e) {
-    fmt.Println(e.Code, e.Msg)
-}
+var e *errors.RichError = nil
+e.Error()       // -> ""
+e.HTTPStatus()  // -> 200
+e.GetStatus()   // -> Status{Code: 500000, Msg: "系统繁忙..."}
 ```
 
 ---
@@ -275,9 +242,10 @@ if errors.As(err, &e) {
 
 | 操作 | 耗时 | 内存 |
 |------|------|------|
-| `NewRich` | 167 ns | 280 B |
-| `WrapRich` | 185 ns | 328 B |
-| `FromRichError` (RichError) | 0.97 ns | 0 B |
+| `NewRich` | 152 ns | 56 B |
+| `WrapRich` | 173 ns | 104 B |
+| `NewRichNoStack` | ~10 ns | 32 B |
+| `FromRichError` | 0.95 ns | 0 B |
 | `HTTPStatus()` | <1 ns | 0 B |
 
 ---
@@ -286,9 +254,9 @@ if errors.As(err, &e) {
 
 ```
 errors/
-├── rich_error.go      # RichError + Status 核心类型
+├── rich_error.go      # RichError + Status + MarshalJSON
 ├── rich_api.go        # API + 预定义业务码 + 快捷函数
-├── stack.go           # 堆栈捕获
+├── stack.go           # 堆栈捕获 (sync.Pool 优化)
 ├── rich_error_test.go # 功能测试
 └── rich_benchmark_test.go # 性能测试
 ```
