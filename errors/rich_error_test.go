@@ -79,7 +79,7 @@ func TestFromRichError(t *testing.T) {
 	if converted.Code != 500000 {
 		t.Errorf("expected Code=500000, got %d", converted.Code)
 	}
-	if converted.Msg != "系统内部错误" {
+	if converted.Msg != RichMsgInternal {
 		t.Errorf("expected default msg, got %s", converted.Msg)
 	}
 	if converted.Unwrap() != stdErr {
