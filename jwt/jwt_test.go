@@ -19,8 +19,8 @@ func TestMustNewTokenManager(t *testing.T) {
 	if manager.refreshTokenExpiry != DefaultJWTOptions().RefreshTokenExpiry {
 		t.Errorf("Expected default refresh token expiry %v, got %v", DefaultJWTOptions().RefreshTokenExpiry, manager.refreshTokenExpiry)
 	}
-	if len(manager.blacklist) != 0 {
-		t.Error("Expected empty blacklist map")
+	if manager.GetBlacklistSize() != 0 {
+		t.Error("Expected empty blacklist")
 	}
 }
 
@@ -111,10 +111,37 @@ func TestTokenManager_ValidateToken(t *testing.T) {
 		t.Errorf("Expected session ID %s, got %s", "test-session", claims.SessionID)
 	}
 
+	if v, ok := claims.CustomClaims["department"]; !ok || v != "engineering" {
+		t.Errorf("Expected custom claim department=engineering, got %v (exists=%v)", v, ok)
+	}
+
 	// 测试无效 token
 	_, err = manager.ValidateToken("invalid-token")
 	if err == nil {
 		t.Error("Expected error for invalid token")
+	}
+}
+
+func TestStandardClaims_UnmarshalJSON_JTINumber(t *testing.T) {
+	var c StandardClaims
+	if err := c.UnmarshalJSON([]byte(`{"sub":"u-1","jti":123,"type":"access","sid":"s-1","foo":"bar"}`)); err != nil {
+		t.Fatalf("UnmarshalJSON error: %v", err)
+	}
+
+	if c.TokenID != "123" {
+		t.Fatalf("Expected TokenID=123, got %q", c.TokenID)
+	}
+	if c.Subject != "u-1" {
+		t.Fatalf("Expected Subject=u-1, got %q", c.Subject)
+	}
+	if c.TokenType != AccessToken {
+		t.Fatalf("Expected TokenType=access, got %q", c.TokenType)
+	}
+	if c.SessionID != "s-1" {
+		t.Fatalf("Expected SessionID=s-1, got %q", c.SessionID)
+	}
+	if v, ok := c.CustomClaims["foo"]; !ok || v != "bar" {
+		t.Fatalf("Expected CustomClaims[foo]=bar, got %v (ok=%v)", v, ok)
 	}
 }
 
@@ -133,15 +160,15 @@ func TestTokenManager_RefreshToken(t *testing.T) {
 		t.Fatalf("Failed to generate refresh token: %v", err)
 	}
 
-	// 使用刷新令牌获取新的访问令牌
+	// 使用刷新令牌获取新的访问令牌（rotation：应返回新的 refresh token）
 	accessToken, newRefreshToken, err := manager.RefreshToken(refreshToken)
 	if err != nil {
 		t.Fatalf("Failed to refresh token: %v", err)
 	}
 
-	// 验证返回的刷新令牌是否与原始刷新令牌相同
-	if newRefreshToken != refreshToken {
-		t.Errorf("Expected returned refresh token to match original, got different token")
+	// rotation：返回的 refresh token 应当是新的
+	if newRefreshToken == refreshToken {
+		t.Errorf("Expected rotated refresh token to be different from original")
 	}
 
 	// 验证新的访问令牌
@@ -159,6 +186,12 @@ func TestTokenManager_RefreshToken(t *testing.T) {
 	}
 	if claims.SessionID != sessionID {
 		t.Errorf("Expected session ID %s, got %s", sessionID, claims.SessionID)
+	}
+
+	// rotation：旧 refresh token 应被作废（再次使用应失败）
+	_, _, err = manager.RefreshToken(refreshToken)
+	if err == nil {
+		t.Error("Reusing old refresh token should fail")
 	}
 
 	// 尝试使用访问令牌作为刷新令牌 (应该失败)
@@ -193,7 +226,7 @@ func TestTokenManager_RevokeToken(t *testing.T) {
 	// 测试清理过期的黑名单记录
 	lockIndex := manager.getLockIndex(token)
 	manager.blacklistLock[lockIndex].Lock()
-	manager.blacklist[token] = time.Now().Add(-time.Hour) // 设置为过期时间
+	manager.blacklist[lockIndex][token] = time.Now().Add(-time.Hour)
 	manager.blacklistLock[lockIndex].Unlock()
 
 	manager.CleanBlacklist()
@@ -268,7 +301,7 @@ func TestTokenManager_ValidateToken_Parallel(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt // 捕获循环变量
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+
 			if tt.subject == "" {
 				// 空主题的情况，直接检查生成令牌是否失败
 				_, err := manager.GenerateToken(tt.subject, tt.options)
@@ -297,13 +330,13 @@ func TestNewTokenManager_InvalidKey(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for short secret key")
 	}
-	
+
 	// 测试字符类型不足的密钥
 	_, err = NewTokenManager("onlylowercaseletters")
 	if err == nil {
 		t.Error("Expected error for key with insufficient character variety")
 	}
-	
+
 	// 测试有效密钥
 	_, err = NewTokenManager("this-is-a-very-secure-secret-key-with-mix3d-chars!")
 	if err != nil {
@@ -431,7 +464,7 @@ func TestTokenManager_GetAccessTokenExpiry(t *testing.T) {
 	// 测试默认配置
 	manager1 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
 	expiry1 := manager1.GetAccessTokenExpiry()
-	
+
 	expectedExpiry := DefaultJWTOptions().AccessTokenExpiry
 	if expiry1 != expectedExpiry {
 		t.Errorf("默认配置下，期望访问令牌过期时间为 %v，实际得到 %v", expectedExpiry, expiry1)
@@ -443,7 +476,7 @@ func TestTokenManager_GetAccessTokenExpiry(t *testing.T) {
 	}
 	manager2 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!", customOptions)
 	expiry2 := manager2.GetAccessTokenExpiry()
-	
+
 	if expiry2 != customOptions.AccessTokenExpiry {
 		t.Errorf("自定义配置下，期望访问令牌过期时间为 %v，实际得到 %v", customOptions.AccessTokenExpiry, expiry2)
 	}
@@ -452,7 +485,7 @@ func TestTokenManager_GetAccessTokenExpiry(t *testing.T) {
 	manager3 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
 	manager3.SetTokenExpiry(AccessToken, 2*time.Hour)
 	expiry3 := manager3.GetAccessTokenExpiry()
-	
+
 	if expiry3 != 2*time.Hour {
 		t.Errorf("通过SetTokenExpiry修改后，期望访问令牌过期时间为 %v，实际得到 %v", 2*time.Hour, expiry3)
 	}
@@ -463,7 +496,7 @@ func TestTokenManager_GetRefreshTokenExpiry(t *testing.T) {
 	// 测试默认配置
 	manager1 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
 	expiry1 := manager1.GetRefreshTokenExpiry()
-	
+
 	expectedExpiry := DefaultJWTOptions().RefreshTokenExpiry
 	if expiry1 != expectedExpiry {
 		t.Errorf("默认配置下，期望刷新令牌过期时间为 %v，实际得到 %v", expectedExpiry, expiry1)
@@ -475,7 +508,7 @@ func TestTokenManager_GetRefreshTokenExpiry(t *testing.T) {
 	}
 	manager2 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!", customOptions)
 	expiry2 := manager2.GetRefreshTokenExpiry()
-	
+
 	if expiry2 != customOptions.RefreshTokenExpiry {
 		t.Errorf("自定义配置下，期望刷新令牌过期时间为 %v，实际得到 %v", customOptions.RefreshTokenExpiry, expiry2)
 	}
@@ -484,7 +517,7 @@ func TestTokenManager_GetRefreshTokenExpiry(t *testing.T) {
 	manager3 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
 	manager3.SetTokenExpiry(RefreshToken, 72*time.Hour)
 	expiry3 := manager3.GetRefreshTokenExpiry()
-	
+
 	if expiry3 != 72*time.Hour {
 		t.Errorf("通过SetTokenExpiry修改后，期望刷新令牌过期时间为 %v，实际得到 %v", 72*time.Hour, expiry3)
 	}
