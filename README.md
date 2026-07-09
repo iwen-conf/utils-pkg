@@ -7,6 +7,8 @@
 1. **jwt**: JWT令牌管理
    - 生成与验证JWT令牌
    - 支持访问令牌与刷新令牌
+   - 支持统一身份归一化签发 access/refresh token
+   - 支持默认 issuer/audience 与自定义身份 claim key
    - 高性能的令牌验证缓存
    - 分段锁设计保证高并发性能
 

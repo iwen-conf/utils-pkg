@@ -1,8 +1,6 @@
 package jwt
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -148,6 +146,10 @@ func (c *StandardClaims) UnmarshalJSON(data []byte) error {
 type TokenOptions struct {
 	// 令牌过期时间，覆盖默认值
 	ExpiresIn time.Duration
+	// 签发者，覆盖管理器默认值
+	Issuer string
+	// 受众，覆盖管理器默认值
+	Audience []string
 	// 令牌类型
 	TokenType TokenType
 	// 会话ID
@@ -182,6 +184,12 @@ type JWTOptions struct {
 	AccessTokenExpiry time.Duration
 	// 刷新令牌默认过期时间
 	RefreshTokenExpiry time.Duration
+	// 默认签发者
+	Issuer string
+	// 默认受众
+	Audience []string
+	// TokenProfile 定义业务身份字段写入 custom claims 时的标准 key。
+	TokenProfile *TokenProfile
 	// RefreshTokenReuseAction refresh token 被复用(重放)时的动作
 	RefreshTokenReuseAction RefreshTokenReuseAction
 }
@@ -189,13 +197,13 @@ type JWTOptions struct {
 // DefaultJWTOptions 返回默认的JWT管理器选项
 func DefaultJWTOptions() *JWTOptions {
 	return &JWTOptions{
-		EnableLog:              false,                       // 默认不启用日志
-		BlacklistCleanInterval: 10 * time.Minute,            // 默认10分钟清理一次黑名单
-		EnableCache:            true,                        // 默认启用缓存
-		CacheSize:              1000,                        // 默认缓存1000个结果
-		CacheTTL:               5 * time.Minute,             // 默认缓存5分钟
-		AccessTokenExpiry:      15 * time.Minute,            // 默认访问令牌15分钟过期
-		RefreshTokenExpiry:     24 * time.Hour,              // 默认刷新令牌24小时过期
+		EnableLog:               false,                       // 默认不启用日志
+		BlacklistCleanInterval:  10 * time.Minute,            // 默认10分钟清理一次黑名单
+		EnableCache:             true,                        // 默认启用缓存
+		CacheSize:               1000,                        // 默认缓存1000个结果
+		CacheTTL:                5 * time.Minute,             // 默认缓存5分钟
+		AccessTokenExpiry:       15 * time.Minute,            // 默认访问令牌15分钟过期
+		RefreshTokenExpiry:      24 * time.Hour,              // 默认刷新令牌24小时过期
 		RefreshTokenReuseAction: RevokeSessionOnRefreshReuse, // 默认发现复用就封禁整个 session
 	}
 }
@@ -233,9 +241,13 @@ type TokenManager struct {
 	accessTokenExpiry  time.Duration
 	refreshTokenExpiry time.Duration
 
+	issuer       string
+	audience     []string
+	tokenProfile TokenProfile
+
 	// 选项
-	enableLog              bool
-	enableCache            bool
+	enableLog               bool
+	enableCache             bool
 	refreshTokenReuseAction RefreshTokenReuseAction
 }
 
@@ -313,6 +325,9 @@ func NewTokenManager(secretKey string, options ...*JWTOptions) (*TokenManager, e
 		stopCleanup:             make(chan struct{}),
 		accessTokenExpiry:       opts.AccessTokenExpiry,
 		refreshTokenExpiry:      opts.RefreshTokenExpiry,
+		issuer:                  opts.Issuer,
+		audience:                cloneStringSlice(opts.Audience),
+		tokenProfile:            normalizeTokenProfile(opts.TokenProfile),
 	}
 
 	if opts.BlacklistCleanInterval > 0 {
@@ -421,7 +436,7 @@ func (m *TokenManager) startCleanupRoutine() {
 		select {
 		case <-m.cleanupTicker.C:
 			m.CleanBlacklist()
-			m.cleanCache()          // 同时清理过期缓存
+			m.cleanCache()           // 同时清理过期缓存
 			m.cleanUsedRefreshJTIs() // 同时清理过期的 refresh jti 记录
 		case <-m.stopCleanup:
 			m.cleanupTicker.Stop()
@@ -466,6 +481,16 @@ func (m *TokenManager) SetTokenExpiry(tokenType TokenType, expiry time.Duration)
 	}
 }
 
+// SetIssuer 设置默认 JWT 签发者。
+func (m *TokenManager) SetIssuer(issuer string) {
+	m.issuer = issuer
+}
+
+// SetAudience 设置默认 JWT 受众。
+func (m *TokenManager) SetAudience(audience ...string) {
+	m.audience = cloneStringSlice(audience)
+}
+
 // logf 内部日志记录函数
 func (m *TokenManager) logf(format string, args ...interface{}) {
 	if m.enableLog {
@@ -505,21 +530,31 @@ func (m *TokenManager) GenerateToken(subject string, options ...*TokenOptions) (
 	// 使用 CSPRNG，避免可预测的时间戳 ID。
 	tokenID := opts.TokenID
 	if tokenID == "" {
-		var b [16]byte
-		if _, err := rand.Read(b[:]); err != nil {
+		generatedID, err := generateRandomHex(16)
+		if err != nil {
 			return "", fmt.Errorf("failed to generate token id: %w", err)
 		}
-		tokenID = hex.EncodeToString(b[:])
+		tokenID = generatedID
 	}
 
 	// 构建基本声明
 	now := time.Now()
+	issuer := opts.Issuer
+	if issuer == "" {
+		issuer = m.issuer
+	}
+	audience := cloneStringSlice(opts.Audience)
+	if len(audience) == 0 {
+		audience = cloneStringSlice(m.audience)
+	}
 	claims := &StandardClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(now.Add(expiresIn)),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
 			ID:        tokenID,
+			Issuer:    issuer,
+			Audience:  audience,
 		},
 		TokenType: tokenType,
 		SessionID: opts.SessionID,
@@ -652,8 +687,11 @@ func (m *TokenManager) RefreshToken(refreshTokenStr string) (accessToken string,
 
 	// rotation：生成新的 refresh token（同 sid）
 	newRefresh, err := m.GenerateToken(claims.RegisteredClaims.Subject, &TokenOptions{
-		TokenType: RefreshToken,
-		SessionID: claims.SessionID,
+		TokenType:    RefreshToken,
+		Issuer:       claims.Issuer,
+		Audience:     cloneStringSlice(claims.Audience),
+		SessionID:    claims.SessionID,
+		CustomClaims: cloneMapClaims(claims.CustomClaims),
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("生成刷新令牌失败: %w", err)
@@ -661,8 +699,11 @@ func (m *TokenManager) RefreshToken(refreshTokenStr string) (accessToken string,
 
 	// 生成新的 access token
 	newAccess, err := m.GenerateToken(claims.RegisteredClaims.Subject, &TokenOptions{
-		TokenType: AccessToken,
-		SessionID: claims.SessionID,
+		TokenType:    AccessToken,
+		Issuer:       claims.Issuer,
+		Audience:     cloneStringSlice(claims.Audience),
+		SessionID:    claims.SessionID,
+		CustomClaims: cloneMapClaims(claims.CustomClaims),
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("生成访问令牌失败: %w", err)
@@ -903,6 +944,9 @@ func (m *TokenManager) GetTokenExpiryConfig() *JWTOptions {
 		CacheTTL:                m.cacheTTL,
 		AccessTokenExpiry:       m.accessTokenExpiry,
 		RefreshTokenExpiry:      m.refreshTokenExpiry,
+		Issuer:                  m.issuer,
+		Audience:                cloneStringSlice(m.audience),
+		TokenProfile:            m.tokenProfile.clone(),
 		RefreshTokenReuseAction: m.refreshTokenReuseAction,
 	}
 }
