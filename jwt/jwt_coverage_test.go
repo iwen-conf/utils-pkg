@@ -376,10 +376,10 @@ func TestTokenManager_RevokeToken_NoExpUsesDefaultExpire(t *testing.T) {
 		t.Fatalf("RevokeToken error: %v", err)
 	}
 
-	idx := tm.getLockIndex(tokenStr)
-	tm.blacklistLock[idx].RLock()
-	expireAt, ok := tm.blacklist[idx][tokenStr]
-	tm.blacklistLock[idx].RUnlock()
+	store := tm.revocations.(*MemoryRevocationStore)
+	store.mu.RLock()
+	expireAt, ok := store.entries[tokenRevocationKey(tokenStr)]
+	store.mu.RUnlock()
 	if !ok {
 		t.Fatalf("Expected token in blacklist")
 	}
@@ -423,18 +423,18 @@ func TestTokenManager_IsBlacklisted_ExpiredEntryIsRemoved(t *testing.T) {
 	tm.EnableLog(true)
 	tokenStr := "aaaaaaaaaa.bbbbbbbbbb.cccccccccc"
 
-	idx := tm.getLockIndex(tokenStr)
-	tm.blacklistLock[idx].Lock()
-	tm.blacklist[idx][tokenStr] = time.Now().Add(-time.Second)
-	tm.blacklistLock[idx].Unlock()
+	store := tm.revocations.(*MemoryRevocationStore)
+	store.mu.Lock()
+	store.entries[tokenRevocationKey(tokenStr)] = time.Now().Add(-time.Second)
+	store.mu.Unlock()
 
 	if tm.IsBlacklisted(tokenStr) {
 		t.Fatalf("Expected not blacklisted")
 	}
 
-	tm.blacklistLock[idx].RLock()
-	_, ok := tm.blacklist[idx][tokenStr]
-	tm.blacklistLock[idx].RUnlock()
+	store.mu.RLock()
+	_, ok := store.entries[tokenRevocationKey(tokenStr)]
+	store.mu.RUnlock()
 	if ok {
 		t.Fatalf("Expected expired entry removed")
 	}
@@ -445,10 +445,10 @@ func TestTokenManager_IsBlacklisted_NonExpiredTrue(t *testing.T) {
 	tm.EnableLog(true)
 	tokenStr := "bbbbbbbbbb.cccccccccc.dddddddddd"
 
-	idx := tm.getLockIndex(tokenStr)
-	tm.blacklistLock[idx].Lock()
-	tm.blacklist[idx][tokenStr] = time.Now().Add(time.Hour)
-	tm.blacklistLock[idx].Unlock()
+	store := tm.revocations.(*MemoryRevocationStore)
+	store.mu.Lock()
+	store.entries[tokenRevocationKey(tokenStr)] = time.Now().Add(time.Hour)
+	store.mu.Unlock()
 
 	if !tm.IsBlacklisted(tokenStr) {
 		t.Fatalf("Expected blacklisted")
@@ -460,16 +460,16 @@ func TestTokenManager_CleanBlacklist_LogsAndCleans(t *testing.T) {
 	tm.EnableLog(true)
 	tokenStr := "cccccccccc.dddddddddd.eeeeeeeeee"
 
-	idx := tm.getLockIndex(tokenStr)
-	tm.blacklistLock[idx].Lock()
-	tm.blacklist[idx][tokenStr] = time.Now().Add(-time.Second)
-	tm.blacklistLock[idx].Unlock()
+	store := tm.revocations.(*MemoryRevocationStore)
+	store.mu.Lock()
+	store.entries[tokenRevocationKey(tokenStr)] = time.Now().Add(-time.Second)
+	store.mu.Unlock()
 
 	tm.CleanBlacklist()
 
-	tm.blacklistLock[idx].RLock()
-	_, ok := tm.blacklist[idx][tokenStr]
-	tm.blacklistLock[idx].RUnlock()
+	store.mu.RLock()
+	_, ok := store.entries[tokenRevocationKey(tokenStr)]
+	store.mu.RUnlock()
 	if ok {
 		t.Fatalf("Expected expired blacklist entry removed")
 	}
@@ -493,10 +493,10 @@ func TestTokenManager_startCleanupRoutine_TickAndStop(t *testing.T) {
 	tm.cacheLock.Unlock()
 
 	tokenStr := "ffffffffff.gggggggggg.hhhhhhhhhh"
-	idx := tm.getLockIndex(tokenStr)
-	tm.blacklistLock[idx].Lock()
-	tm.blacklist[idx][tokenStr] = time.Now().Add(-time.Second)
-	tm.blacklistLock[idx].Unlock()
+	store := tm.revocations.(*MemoryRevocationStore)
+	store.mu.Lock()
+	store.entries[tokenRevocationKey(tokenStr)] = time.Now().Add(-time.Second)
+	store.mu.Unlock()
 
 	tm.cleanupTicker = time.NewTicker(time.Millisecond)
 	done := make(chan struct{})

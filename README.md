@@ -10,7 +10,7 @@
    - 支持统一身份归一化签发 access/refresh token
    - 支持默认 issuer/audience 与自定义身份 claim key
    - 高性能的令牌验证缓存
-   - 分段锁设计保证高并发性能
+   - 支持 token/session 吊销和可插拔 RevocationStore
 
 2. **crypto**: 加密工具
    - AES加密/解密

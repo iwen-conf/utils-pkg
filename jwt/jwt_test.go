@@ -1,6 +1,7 @@
 package jwt
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -193,6 +194,9 @@ func TestTokenManager_RefreshToken(t *testing.T) {
 	if err == nil {
 		t.Error("Reusing old refresh token should fail")
 	}
+	if _, err := manager.ValidateToken(accessToken); !errors.Is(err, ErrSessionRevoked) {
+		t.Fatalf("replayed refresh token should revoke session, ValidateToken() error = %v", err)
+	}
 
 	// 尝试使用访问令牌作为刷新令牌 (应该失败)
 	_, _, err = manager.RefreshToken(accessToken)
@@ -224,10 +228,10 @@ func TestTokenManager_RevokeToken(t *testing.T) {
 	}
 
 	// 测试清理过期的黑名单记录
-	lockIndex := manager.getLockIndex(token)
-	manager.blacklistLock[lockIndex].Lock()
-	manager.blacklist[lockIndex][token] = time.Now().Add(-time.Hour)
-	manager.blacklistLock[lockIndex].Unlock()
+	store := manager.revocations.(*MemoryRevocationStore)
+	store.mu.Lock()
+	store.entries[tokenRevocationKey(token)] = time.Now().Add(-time.Hour)
+	store.mu.Unlock()
 
 	manager.CleanBlacklist()
 	if manager.IsBlacklisted(token) {

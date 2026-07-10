@@ -1,6 +1,7 @@
 package jwt
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,8 +23,7 @@ const (
 	RefreshToken TokenType = "refresh"
 )
 
-// RefreshTokenReuseAction refresh token 被检测到复用(重放)时要执行的动作
-// 单实例模式下，该动作会通过黑名单实现“立即失效”。
+// RefreshTokenReuseAction refresh token 被检测到复用(重放)时要执行的动作。
 type RefreshTokenReuseAction int
 
 const (
@@ -172,7 +172,7 @@ func DefaultTokenOptions() *TokenOptions {
 type JWTOptions struct {
 	// 是否启用日志
 	EnableLog bool
-	// 黑名单清理间隔
+	// 默认内存吊销存储和内部缓存的清理间隔
 	BlacklistCleanInterval time.Duration
 	// 启用结果缓存
 	EnableCache bool
@@ -192,13 +192,15 @@ type JWTOptions struct {
 	TokenProfile *TokenProfile
 	// RefreshTokenReuseAction refresh token 被复用(重放)时的动作
 	RefreshTokenReuseAction RefreshTokenReuseAction
+	// RevocationStore 保存 token/session 吊销状态；为空时使用单进程内存实现。
+	RevocationStore RevocationStore
 }
 
 // DefaultJWTOptions 返回默认的JWT管理器选项
 func DefaultJWTOptions() *JWTOptions {
 	return &JWTOptions{
 		EnableLog:               false,                       // 默认不启用日志
-		BlacklistCleanInterval:  10 * time.Minute,            // 默认10分钟清理一次黑名单
+		BlacklistCleanInterval:  10 * time.Minute,            // 默认10分钟清理吊销记录与内部缓存
 		EnableCache:             true,                        // 默认启用缓存
 		CacheSize:               1000,                        // 默认缓存1000个结果
 		CacheTTL:                5 * time.Minute,             // 默认缓存5分钟
@@ -218,10 +220,9 @@ type cacheItem struct {
 // TokenManager JWT 令牌管理器
 type TokenManager struct {
 	secretKey              []byte
-	blacklist              []map[string]time.Time
-	blacklistLock          []*sync.RWMutex
-	blacklistSegments      int
+	revocations            RevocationStore
 	blacklistCleanInterval time.Duration
+	refreshJTISegments     int
 
 	// refresh token 复用检测（单实例内存版）
 	usedRefreshJTIs     []map[string]time.Time
@@ -233,7 +234,7 @@ type TokenManager struct {
 	cacheSize int
 	cacheTTL  time.Duration
 
-	// 清理黑名单的定时器
+	// 清理吊销记录和内部缓存的定时器
 	cleanupTicker *time.Ticker
 	stopCleanup   chan struct{}
 
@@ -297,23 +298,22 @@ func NewTokenManager(secretKey string, options ...*JWTOptions) (*TokenManager, e
 	}
 
 	const numSegments = 16
-	locks := make([]*sync.RWMutex, numSegments)
-	blacklist := make([]map[string]time.Time, numSegments)
 	usedLocks := make([]*sync.RWMutex, numSegments)
 	usedJTIs := make([]map[string]time.Time, numSegments)
 	for i := 0; i < numSegments; i++ {
-		locks[i] = &sync.RWMutex{}
-		blacklist[i] = make(map[string]time.Time)
 		usedLocks[i] = &sync.RWMutex{}
 		usedJTIs[i] = make(map[string]time.Time)
+	}
+	revocations := opts.RevocationStore
+	if revocations == nil {
+		revocations = NewMemoryRevocationStore()
 	}
 
 	manager := &TokenManager{
 		secretKey:               []byte(secretKey),
-		blacklist:               blacklist,
-		blacklistLock:           locks,
-		blacklistSegments:       numSegments,
+		revocations:             revocations,
 		blacklistCleanInterval:  opts.BlacklistCleanInterval,
+		refreshJTISegments:      numSegments,
 		usedRefreshJTIs:         usedJTIs,
 		usedRefreshJTIsLock:     usedLocks,
 		cache:                   make(map[string]cacheItem),
@@ -348,23 +348,12 @@ func MustNewTokenManager(secretKey string, options ...*JWTOptions) *TokenManager
 	return manager
 }
 
-// 获取令牌对应的锁索引
-func (m *TokenManager) getLockIndex(token string) int {
-	// 简单哈希函数，将令牌映射到锁索引
-	var sum int
-	for i := 0; i < len(token) && i < 10; i++ {
-		sum += int(token[i])
-	}
-	return sum % m.blacklistSegments
-}
-
 func (m *TokenManager) getJTIIndex(jti string) int {
-	// 复用 blacklistSegments 的分段数
 	var sum int
 	for i := 0; i < len(jti) && i < 10; i++ {
 		sum += int(jti[i])
 	}
-	return sum % m.blacklistSegments
+	return sum % m.refreshJTISegments
 }
 
 // consumeRefreshJTI 标记 refresh token 的 jti 为已使用。
@@ -386,13 +375,36 @@ func (m *TokenManager) consumeRefreshJTI(jti string, expireAt time.Time) bool {
 	return true
 }
 
+func (m *TokenManager) refreshJTIUsed(jti string) bool {
+	if jti == "" {
+		return false
+	}
+	idx := m.getJTIIndex(jti)
+	now := time.Now()
+	m.usedRefreshJTIsLock[idx].RLock()
+	expiresAt, ok := m.usedRefreshJTIs[idx][jti]
+	m.usedRefreshJTIsLock[idx].RUnlock()
+	if !ok {
+		return false
+	}
+	if expiresAt.After(now) {
+		return true
+	}
+	m.usedRefreshJTIsLock[idx].Lock()
+	if current, exists := m.usedRefreshJTIs[idx][jti]; exists && !current.After(now) {
+		delete(m.usedRefreshJTIs[idx], jti)
+	}
+	m.usedRefreshJTIsLock[idx].Unlock()
+	return false
+}
+
 func (m *TokenManager) cleanUsedRefreshJTIs() {
 	if m.cacheTTL <= 0 {
 		// 允许 ttl<=0 的情况仍然清理 jti 表
 	}
 	now := time.Now()
 	cleaned := 0
-	for i := 0; i < m.blacklistSegments; i++ {
+	for i := 0; i < m.refreshJTISegments; i++ {
 		m.usedRefreshJTIsLock[i].Lock()
 		for jti, expireAt := range m.usedRefreshJTIs[i] {
 			if now.After(expireAt) {
@@ -407,30 +419,21 @@ func (m *TokenManager) cleanUsedRefreshJTIs() {
 	}
 }
 
-func (m *TokenManager) revokeSession(sessionID string) {
+func (m *TokenManager) revokeSession(ctx context.Context, sessionID string, expiresAt time.Time) error {
 	if sessionID == "" {
-		return
+		return ErrSessionIDMissing
 	}
-
-	// 单实例实现：把当前缓存/黑名单机制提升到 session 级别，通过撤销 session 标记来立即拒绝。
-	// 这里采用一个约定 key："sid:<sessionID>"，并存入 blacklist，过期时间取 refreshTokenExpiry。
-	key := "sid:" + sessionID
-	expireAt := time.Now().Add(m.refreshTokenExpiry)
-	idx := m.getLockIndex(key)
-	m.blacklistLock[idx].Lock()
-	m.blacklist[idx][key] = expireAt
-	m.blacklistLock[idx].Unlock()
+	return m.revocations.Revoke(nonNilContext(ctx), sessionRevocationKey(sessionID), expiresAt)
 }
 
-func (m *TokenManager) isSessionRevoked(sessionID string) bool {
+func (m *TokenManager) isSessionRevoked(ctx context.Context, sessionID string) (bool, error) {
 	if sessionID == "" {
-		return false
+		return false, nil
 	}
-	key := "sid:" + sessionID
-	return m.IsBlacklisted(key)
+	return m.revocations.IsRevoked(nonNilContext(ctx), sessionRevocationKey(sessionID))
 }
 
-// startCleanupRoutine 启动黑名单自动清理例程
+// startCleanupRoutine 启动吊销记录和内部缓存清理例程。
 func (m *TokenManager) startCleanupRoutine() {
 	for {
 		select {
@@ -583,38 +586,53 @@ func (m *TokenManager) GenerateToken(subject string, options ...*TokenOptions) (
 
 // ValidateToken 验证JWT令牌并返回声明
 func (m *TokenManager) ValidateToken(tokenStr string) (*StandardClaims, error) {
-	// 先检查缓存以提高性能
-	if m.enableCache {
-		if claims, err, found := m.checkCache(tokenStr); found {
-			return claims, err
-		}
+	return m.ValidateTokenContext(context.Background(), tokenStr)
+}
+
+// ValidateTokenContext 验证 JWT，并使用请求上下文检查 token/session 吊销状态。
+func (m *TokenManager) ValidateTokenContext(ctx context.Context, tokenStr string) (*StandardClaims, error) {
+	ctx = nonNilContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
-	// 快速检查是否在黑名单中
-	if m.IsBlacklisted(tokenStr) {
-		if m.enableCache {
-			m.cacheResult(tokenStr, nil, errors.New("token has been revoked"))
+	revoked, err := m.IsTokenRevokedContext(ctx, tokenStr)
+	if err != nil {
+		return nil, fmt.Errorf("check token revocation: %w", err)
+	}
+	if revoked {
+		m.deleteCacheResult(tokenStr)
+		return nil, ErrTokenRevoked
+	}
+
+	// 解析缓存只负责性能；命中后仍需检查会话吊销状态。
+	if m.enableCache {
+		if claims, cachedErr, found := m.checkCache(tokenStr); found {
+			if cachedErr != nil || claims == nil {
+				return claims, cachedErr
+			}
+			revoked, err := m.isSessionRevoked(ctx, claims.SessionID)
+			if err != nil {
+				return nil, fmt.Errorf("check session revocation: %w", err)
+			}
+			if revoked {
+				m.deleteCacheResult(tokenStr)
+				return nil, ErrSessionRevoked
+			}
+			return claims, nil
 		}
-		return nil, errors.New("token has been revoked")
 	}
 
 	// 进行预检查，避免解析无效token
 	if !m.isTokenFormatValid(tokenStr) {
+		err := errors.New("invalid token format")
 		if m.enableCache {
-			m.cacheResult(tokenStr, nil, errors.New("invalid token format"))
+			m.cacheResult(tokenStr, nil, err)
 		}
-		return nil, errors.New("invalid token format")
+		return nil, err
 	}
 
-	// 解析并验证令牌
-	token, err := parseWithClaims(tokenStr, &StandardClaims{}, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("意外的签名方法: %v", token.Header["alg"])
-		}
-		return m.secretKey, nil
-	})
-
-	// 如果解析出错
+	claims, err := m.parseTokenClaims(tokenStr, true)
 	if err != nil {
 		if m.enableCache {
 			m.cacheResult(tokenStr, nil, err)
@@ -622,43 +640,63 @@ func (m *TokenManager) ValidateToken(tokenStr string) (*StandardClaims, error) {
 		return nil, err
 	}
 
-	// 如果验证通过
-	if claims, ok := token.Claims.(*StandardClaims); ok && token.Valid {
-		// session 级撤销：一旦 session 被标记撤销，则所有该 session 的 token 都应拒绝
-		if m.isSessionRevoked(claims.SessionID) {
-			err := errors.New("session has been revoked")
-			if m.enableCache {
-				m.cacheResult(tokenStr, nil, err)
-			}
-			return nil, err
-		}
-
-		// 缓存验证成功的结果
-		if m.enableCache {
-			m.cacheResult(tokenStr, claims, nil)
-		}
-		return claims, nil
+	revoked, err = m.isSessionRevoked(ctx, claims.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("check session revocation: %w", err)
+	}
+	if revoked {
+		return nil, ErrSessionRevoked
 	}
 
-	// 缓存无效令牌结果
 	if m.enableCache {
-		m.cacheResult(tokenStr, nil, errors.New("invalid token"))
+		m.cacheResult(tokenStr, claims, nil)
 	}
-	return nil, errors.New("invalid token")
+	return claims, nil
+}
+
+func (m *TokenManager) parseTokenClaims(tokenStr string, validateClaims bool) (*StandardClaims, error) {
+	parserOptions := make([]jwt.ParserOption, 0, 1)
+	if !validateClaims {
+		parserOptions = append(parserOptions, jwt.WithoutClaimsValidation())
+	}
+	token, err := parseWithClaims(tokenStr, &StandardClaims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("意外的签名方法: %v", token.Header["alg"])
+		}
+		return m.secretKey, nil
+	}, parserOptions...)
+	if err != nil {
+		return nil, err
+	}
+	claims, ok := token.Claims.(*StandardClaims)
+	if !ok || !token.Valid {
+		return nil, errors.New("invalid token")
+	}
+	return claims, nil
 }
 
 // RefreshToken 刷新访问令牌并返回新的访问令牌和新的刷新令牌（rotation）。
 // 当检测到 refresh token 复用(重放)时，会按配置执行动作（默认封禁整个 session）。
 func (m *TokenManager) RefreshToken(refreshTokenStr string) (accessToken string, refreshToken string, err error) {
-	// 验证刷新令牌
-	claims, err := m.ValidateToken(refreshTokenStr)
-	if err != nil {
-		return "", "", fmt.Errorf("刷新令牌验证失败: %w", err)
-	}
+	return m.RefreshTokenContext(context.Background(), refreshTokenStr)
+}
 
-	// 如果 session 已被撤销，直接拒绝
-	if m.isSessionRevoked(claims.SessionID) {
-		return "", "", errors.New("session has been revoked")
+// RefreshTokenContext 使用请求上下文刷新访问令牌并轮换刷新令牌。
+func (m *TokenManager) RefreshTokenContext(ctx context.Context, refreshTokenStr string) (accessToken string, refreshToken string, err error) {
+	ctx = nonNilContext(ctx)
+	// 验证刷新令牌
+	claims, err := m.ValidateTokenContext(ctx, refreshTokenStr)
+	if err != nil {
+		if errors.Is(err, ErrTokenRevoked) {
+			replayClaims, parseErr := m.parseTokenClaims(refreshTokenStr, false)
+			if parseErr == nil && replayClaims.TokenType == RefreshToken && m.refreshJTIUsed(replayClaims.TokenID) {
+				if revokeErr := m.revokeSession(ctx, replayClaims.SessionID, m.sessionRevocationExpiry(replayClaims)); revokeErr != nil {
+					return "", "", fmt.Errorf("revoke replayed refresh token session: %w", revokeErr)
+				}
+				return "", "", errors.New("refresh token reuse detected")
+			}
+		}
+		return "", "", fmt.Errorf("刷新令牌验证失败: %w", err)
 	}
 
 	// 确保是刷新令牌类型
@@ -680,7 +718,9 @@ func (m *TokenManager) RefreshToken(refreshTokenStr string) (accessToken string,
 	if first := m.consumeRefreshJTI(claims.TokenID, expireAt); !first {
 		switch m.refreshTokenReuseAction {
 		case RevokeSessionOnRefreshReuse:
-			m.revokeSession(claims.SessionID)
+			if err := m.revokeSession(ctx, claims.SessionID, m.sessionRevocationExpiry(claims)); err != nil {
+				return "", "", fmt.Errorf("revoke replayed refresh token session: %w", err)
+			}
 		}
 		return "", "", errors.New("refresh token reuse detected")
 	}
@@ -709,10 +749,20 @@ func (m *TokenManager) RefreshToken(refreshTokenStr string) (accessToken string,
 		return "", "", fmt.Errorf("生成访问令牌失败: %w", err)
 	}
 
-	// 旧 refresh 立即作废
-	_ = m.RevokeToken(refreshTokenStr)
+	// 旧 refresh 立即作废；失败时不返回新令牌，避免轮换状态不一致。
+	if err := m.RevokeTokenContext(ctx, refreshTokenStr); err != nil {
+		return "", "", fmt.Errorf("revoke rotated refresh token: %w", err)
+	}
 
 	return newAccess, newRefresh, nil
+}
+
+func (m *TokenManager) sessionRevocationExpiry(claims *StandardClaims) time.Time {
+	expiresAt := time.Now().Add(m.refreshTokenExpiry)
+	if claims != nil && claims.ExpiresAt != nil && claims.ExpiresAt.Time.After(expiresAt) {
+		return claims.ExpiresAt.Time
+	}
+	return expiresAt
 }
 
 // 检查令牌格式是否有效（快速预检查）
@@ -753,11 +803,7 @@ func (m *TokenManager) checkCache(tokenStr string) (*StandardClaims, error, bool
 
 	// 返回缓存的结果
 	if m.enableLog {
-		prefixLen := 10
-		if len(tokenStr) < prefixLen {
-			prefixLen = len(tokenStr)
-		}
-		m.logf("使用缓存结果验证令牌: %s...", tokenStr[:prefixLen])
+		m.logf("使用缓存结果验证令牌: token_hash=%s", tokenLogID(tokenStr))
 	}
 	return item.claims, item.err, true
 }
@@ -778,6 +824,15 @@ func (m *TokenManager) cacheResult(tokenStr string, claims *StandardClaims, err 
 		err:       err,
 		timestamp: time.Now(),
 	}
+}
+
+func (m *TokenManager) deleteCacheResult(tokenStr string) {
+	if !m.enableCache {
+		return
+	}
+	m.cacheLock.Lock()
+	delete(m.cache, tokenStr)
+	m.cacheLock.Unlock()
 }
 
 // 清理最旧的部分缓存
@@ -828,103 +883,144 @@ func (m *TokenManager) cleanCache() {
 	}
 }
 
-// RevokeToken 撤销令牌（加入黑名单）
+// RevokeToken 撤销一个具体令牌。
 func (m *TokenManager) RevokeToken(tokenStr string) error {
+	return m.RevokeTokenContext(context.Background(), tokenStr)
+}
+
+// RevokeTokenContext 幂等吊销一个具体令牌。
+func (m *TokenManager) RevokeTokenContext(ctx context.Context, tokenStr string) error {
+	ctx = nonNilContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if tokenStr == "" {
 		return errors.New("token cannot be empty")
 	}
 
-	claims, err := m.ValidateToken(tokenStr)
+	revoked, err := m.IsTokenRevokedContext(ctx, tokenStr)
+	if err != nil {
+		return fmt.Errorf("check token revocation: %w", err)
+	}
+	if revoked {
+		m.deleteCacheResult(tokenStr)
+		return nil
+	}
+	if !m.isTokenFormatValid(tokenStr) {
+		return errors.New("invalid token format")
+	}
+
+	claims, err := m.parseTokenClaims(tokenStr, false)
 	if err != nil {
 		return fmt.Errorf("无法撤销无效的令牌: %w", err)
 	}
 
-	var expireTime time.Time
+	expireTime := time.Now().Add(24 * time.Hour)
 	if claims.ExpiresAt != nil {
 		expireTime = claims.ExpiresAt.Time
-	} else {
-		expireTime = time.Now().Add(24 * time.Hour)
+	}
+	if !expireTime.After(time.Now()) {
+		m.deleteCacheResult(tokenStr)
+		return nil
 	}
 
-	if m.enableLog && len(tokenStr) > 10 {
-		m.logf("撤销令牌: %s..., 过期时间: %v", tokenStr[:10], expireTime)
+	if m.enableLog {
+		m.logf("撤销令牌: token_hash=%s, 过期时间: %v", tokenLogID(tokenStr), expireTime)
 	}
-
-	idx := m.getLockIndex(tokenStr)
-	m.blacklistLock[idx].Lock()
-	m.blacklist[idx][tokenStr] = expireTime
-	m.blacklistLock[idx].Unlock()
-
-	if m.enableCache {
-		m.cacheLock.Lock()
-		delete(m.cache, tokenStr)
-		m.cacheLock.Unlock()
+	if err := m.revocations.Revoke(ctx, tokenRevocationKey(tokenStr), expireTime); err != nil {
+		return fmt.Errorf("store token revocation: %w", err)
 	}
-
+	m.deleteCacheResult(tokenStr)
 	return nil
 }
 
 // IsBlacklisted 检查令牌是否在黑名单中
 func (m *TokenManager) IsBlacklisted(tokenStr string) bool {
-	idx := m.getLockIndex(tokenStr)
-	m.blacklistLock[idx].RLock()
-	expireAt, exists := m.blacklist[idx][tokenStr]
-	m.blacklistLock[idx].RUnlock()
-
-	if !exists {
-		return false
+	revoked, err := m.IsTokenRevokedContext(context.Background(), tokenStr)
+	if err != nil {
+		m.logf("检查令牌吊销状态失败: %v", err)
+		return true
 	}
-
-	now := time.Now()
-	if now.After(expireAt) {
-		if m.enableLog && len(tokenStr) > 10 {
-			m.logf("令牌在黑名单中但已过期，移除: %s...", tokenStr[:10])
-		}
-
-		m.blacklistLock[idx].Lock()
-		if expireAt2, exists2 := m.blacklist[idx][tokenStr]; exists2 && now.After(expireAt2) {
-			delete(m.blacklist[idx], tokenStr)
-		}
-		m.blacklistLock[idx].Unlock()
-		return false
-	}
-
-	if m.enableLog && len(tokenStr) > 10 {
-		m.logf("令牌在黑名单中: %s..., 将在 %v 过期", tokenStr[:10], expireAt)
-	}
-	return true
+	return revoked
 }
 
-// CleanBlacklist 清理过期的黑名单记录
-func (m *TokenManager) CleanBlacklist() {
-	now := time.Now()
-	cleaned := 0
-
-	for i := 0; i < m.blacklistSegments; i++ {
-		m.blacklistLock[i].Lock()
-		for token, expireAt := range m.blacklist[i] {
-			if now.After(expireAt) {
-				delete(m.blacklist[i], token)
-				cleaned++
-			}
-		}
-		m.blacklistLock[i].Unlock()
+// IsTokenRevokedContext 查询具体令牌是否已被提前吊销。
+func (m *TokenManager) IsTokenRevokedContext(ctx context.Context, tokenStr string) (bool, error) {
+	if tokenStr == "" {
+		return false, nil
 	}
+	return m.revocations.IsRevoked(nonNilContext(ctx), tokenRevocationKey(tokenStr))
+}
 
+// IsSessionRevokedContext 查询会话是否已被提前吊销。
+func (m *TokenManager) IsSessionRevokedContext(ctx context.Context, sessionID string) (bool, error) {
+	return m.isSessionRevoked(ctx, sessionID)
+}
+
+// RevokeSession 使用任一带 sid 的可信令牌吊销整个会话。
+func (m *TokenManager) RevokeSession(tokenStr string) error {
+	return m.RevokeSessionContext(context.Background(), tokenStr)
+}
+
+// RevokeSessionContext 使用请求上下文吊销令牌所属会话。
+func (m *TokenManager) RevokeSessionContext(ctx context.Context, tokenStr string) error {
+	ctx = nonNilContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if tokenStr == "" {
+		return errors.New("token cannot be empty")
+	}
+	if !m.isTokenFormatValid(tokenStr) {
+		return errors.New("invalid token format")
+	}
+	claims, err := m.parseTokenClaims(tokenStr, false)
+	if err != nil {
+		return fmt.Errorf("无法撤销无效令牌的会话: %w", err)
+	}
+	revoked, err := m.isSessionRevoked(ctx, claims.SessionID)
+	if err != nil {
+		return fmt.Errorf("check session revocation: %w", err)
+	}
+	if revoked {
+		m.deleteCacheResult(tokenStr)
+		return nil
+	}
+	if err := m.revokeSession(ctx, claims.SessionID, m.sessionRevocationExpiry(claims)); err != nil {
+		return fmt.Errorf("store session revocation: %w", err)
+	}
+	m.deleteCacheResult(tokenStr)
+	return nil
+}
+
+// CleanBlacklist 清理支持主动清理能力的吊销存储。
+func (m *TokenManager) CleanBlacklist() {
+	cleaner, ok := m.revocations.(RevocationStoreCleaner)
+	if !ok {
+		return
+	}
+	cleaned, err := cleaner.CleanExpired(context.Background(), time.Now())
+	if err != nil {
+		m.logf("清理吊销记录失败: %v", err)
+		return
+	}
 	if m.enableLog && cleaned > 0 {
 		m.logf("已清理 %d 条过期的黑名单记录", cleaned)
 	}
 }
 
-// GetBlacklistSize 返回黑名单大小
+// GetBlacklistSize 返回支持统计能力的吊销存储记录数。
 func (m *TokenManager) GetBlacklistSize() int {
-	total := 0
-	for i := 0; i < m.blacklistSegments; i++ {
-		m.blacklistLock[i].RLock()
-		total += len(m.blacklist[i])
-		m.blacklistLock[i].RUnlock()
+	sizer, ok := m.revocations.(RevocationStoreSizer)
+	if !ok {
+		return 0
 	}
-	return total
+	size, err := sizer.Size(context.Background())
+	if err != nil {
+		m.logf("统计吊销记录失败: %v", err)
+		return 0
+	}
+	return size
 }
 
 // GetCacheSize 返回缓存大小
@@ -948,6 +1044,7 @@ func (m *TokenManager) GetTokenExpiryConfig() *JWTOptions {
 		Audience:                cloneStringSlice(m.audience),
 		TokenProfile:            m.tokenProfile.clone(),
 		RefreshTokenReuseAction: m.refreshTokenReuseAction,
+		RevocationStore:         m.revocations,
 	}
 }
 
