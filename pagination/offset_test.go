@@ -4,11 +4,11 @@ import "testing"
 
 func TestOffsetRequest_Normalize(t *testing.T) {
 	tests := []struct {
-		name         string
-		offset       int
-		limit        int
-		wantOffset   int
-		wantLimit    int
+		name       string
+		offset     int
+		limit      int
+		wantOffset int
+		wantLimit  int
 	}{
 		{"zero values", 0, 0, 0, DefaultLimit},
 		{"normal values", 10, 20, 10, 20},
@@ -181,7 +181,7 @@ func TestOffsetResponse_Calculate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			resp := OffsetResponse{}
 			resp.Calculate(tt.req, tt.total, tt.actualCount)
-			
+
 			if resp.Offset != tt.req.Offset {
 				t.Errorf("Offset = %d, want %d", resp.Offset, tt.req.Offset)
 			}

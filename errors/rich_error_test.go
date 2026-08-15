@@ -219,8 +219,8 @@ func TestMarshalJSON(t *testing.T) {
 	if !strings.Contains(jsonStr, `"msg":"数据库错误"`) {
 		t.Errorf("JSON should contain msg, got: %s", jsonStr)
 	}
-	if !strings.Contains(jsonStr, `"cause":"db error"`) {
-		t.Errorf("JSON should contain cause, got: %s", jsonStr)
+	if strings.Contains(jsonStr, "cause") || strings.Contains(jsonStr, "db error") {
+		t.Errorf("JSON must not leak cause, got: %s", jsonStr)
 	}
 }
 

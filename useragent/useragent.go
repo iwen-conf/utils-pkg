@@ -1,13 +1,14 @@
 package useragent
 
 import (
+	"container/list"
+	"errors"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
 
-// 预编译正则表达式以提高性能
 var (
 	chromeRegex  = regexp.MustCompile(`(?i)chrome\/[\d.]+`)
 	safariRegex  = regexp.MustCompile(`(?i)safari\/[\d.]+`)
@@ -15,8 +16,8 @@ var (
 	edgeRegex    = regexp.MustCompile(`(?i)(?:edge|edg)\/[\d.]+`)
 	operaRegex   = regexp.MustCompile(`(?i)opr\/[\d.]+`)
 	ieRegex      = regexp.MustCompile(`(?i)msie [\d.]+|trident\/[\d.]+`)
+	versionRegex = regexp.MustCompile(`(?i)version\/[\d.]+`)
 
-	// 使用 map 存储常见的爬虫标识，提高查找效率
 	botIdentifiers = map[string]bool{
 		"bot":                 true,
 		"spider":              true,
@@ -31,7 +32,6 @@ var (
 		"ia_archiver":         true,
 	}
 
-	// 使用 map 存储常见浏览器标识，提高查找效率
 	commonBrowserIdentifiers = map[string]bool{
 		"mozilla":   true,
 		"webkit":    true,
@@ -60,154 +60,128 @@ var (
 	}
 )
 
-// BrowserInfo 存储浏览器信息
+var (
+	// ErrInvalidCacheCapacity 表示 LRU 容量非法。
+	ErrInvalidCacheCapacity = errors.New("invalid cache capacity")
+	// ErrInvalidCacheTTL 表示 TTL 为负数。
+	ErrInvalidCacheTTL = errors.New("invalid cache ttl")
+	// ErrUninitializedCache 表示对 nil cache 调用 Put。
+	ErrUninitializedCache = errors.New("uninitialized cache")
+)
+
+// BrowserInfo 存储启发式浏览器识别结果，不是安全判定。
 type BrowserInfo struct {
-	IsBrowser bool   // 是否是浏览器
-	Name      string // 浏览器名称
-	Version   string // 浏览器版本
+	IsBrowser bool
+	Name      string
+	Version   string
 }
 
-// CacheEntry 缓存条目
-type CacheEntry struct {
-	value      interface{} // 存储的值
-	expiration int64       // 过期时间
+type cacheEntry struct {
+	key        string
+	value      any
+	expiration time.Time
 }
 
-// LRUCache LRU缓存实现
+// LRUCache 使用 list+map 的 O(1) LRU。
 type LRUCache struct {
-	capacity    int                   // 最大容量
-	mu          sync.RWMutex          // 读写锁
-	cache       map[string]CacheEntry // 缓存数据
-	keys        []string              // 按使用顺序存储的键列表
-	ttl         int64                 // 过期时间（秒）
-	cleanupTime int64                 // 上次清理时间
+	capacity int
+	ttl      time.Duration
+	mu       sync.Mutex
+	items    map[string]*list.Element
+	order    *list.List
+	now      func() time.Time
 }
 
-// NewLRUCache 创建一个新的LRU缓存
-func NewLRUCache(capacity int, ttl int64) *LRUCache {
-	return &LRUCache{
-		capacity:    capacity,
-		cache:       make(map[string]CacheEntry, capacity),
-		keys:        make([]string, 0, capacity),
-		ttl:         ttl,
-		cleanupTime: time.Now().Unix(),
+// NewLRUCache 创建 LRU 缓存。ttl==0 表示不过期。
+func NewLRUCache(capacity int, ttl time.Duration) (*LRUCache, error) {
+	if capacity <= 0 {
+		return nil, ErrInvalidCacheCapacity
 	}
+	if ttl < 0 {
+		return nil, ErrInvalidCacheTTL
+	}
+	return &LRUCache{
+		capacity: capacity,
+		ttl:      ttl,
+		items:    make(map[string]*list.Element, capacity),
+		order:    list.New(),
+		now:      time.Now,
+	}, nil
 }
 
-// Get 获取缓存值
-func (c *LRUCache) Get(key string) (interface{}, bool) {
-	c.mu.RLock()
-	entry, ok := c.cache[key]
-	c.mu.RUnlock()
-
+// Get 读取未过期缓存。
+func (c *LRUCache) Get(key string) (any, bool) {
+	if c == nil {
+		return nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	el, ok := c.items[key]
 	if !ok {
 		return nil, false
 	}
-
-	// 检查是否过期
-	now := time.Now().Unix()
-	if entry.expiration > 0 && now > entry.expiration {
-		c.mu.Lock()
-		delete(c.cache, key)
-		c.removeKey(key)
-		c.mu.Unlock()
+	entry := el.Value.(*cacheEntry)
+	if c.ttl > 0 && !c.now().Before(entry.expiration) {
+		c.removeElement(el)
 		return nil, false
 	}
-
-	// 将键移到最近使用的位置
-	c.mu.Lock()
-	c.moveToFront(key)
-
-	// 每隔一段时间清理过期项
-	if now-c.cleanupTime > 300 { // 每5分钟清理一次
-		c.cleanup(now)
-		c.cleanupTime = now
-	}
-	c.mu.Unlock()
-
+	c.order.MoveToFront(el)
 	return entry.value, true
 }
 
-// Put 设置缓存值
-func (c *LRUCache) Put(key string, value interface{}) {
-	now := time.Now().Unix()
-	expiration := int64(0)
-	if c.ttl > 0 {
-		expiration = now + c.ttl
+// Put 写入缓存。
+func (c *LRUCache) Put(key string, value any) error {
+	if c == nil {
+		return ErrUninitializedCache
 	}
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	// 如果键已存在，更新值并移动到前面
-	if _, ok := c.cache[key]; ok {
-		c.cache[key] = CacheEntry{value: value, expiration: expiration}
-		c.moveToFront(key)
-		return
+	var exp time.Time
+	if c.ttl > 0 {
+		exp = c.now().Add(c.ttl)
 	}
-
-	// 如果达到容量，删除最久未使用的键
-	if len(c.cache) >= c.capacity {
-		leastUsed := c.keys[len(c.keys)-1]
-		delete(c.cache, leastUsed)
-		c.keys = c.keys[:len(c.keys)-1]
+	if el, ok := c.items[key]; ok {
+		entry := el.Value.(*cacheEntry)
+		entry.value = value
+		entry.expiration = exp
+		c.order.MoveToFront(el)
+		return nil
 	}
-
-	// 添加新键到缓存
-	c.cache[key] = CacheEntry{value: value, expiration: expiration}
-	c.keys = append([]string{key}, c.keys...)
-}
-
-// moveToFront 将键移到最近使用的位置
-func (c *LRUCache) moveToFront(key string) {
-	for i, k := range c.keys {
-		if k == key {
-			// 从当前位置删除
-			c.keys = append(c.keys[:i], c.keys[i+1:]...)
-			// 添加到最前面
-			c.keys = append([]string{key}, c.keys...)
-			break
+	if c.order.Len() >= c.capacity {
+		if last := c.order.Back(); last != nil {
+			c.removeElement(last)
 		}
 	}
+	el := c.order.PushFront(&cacheEntry{key: key, value: value, expiration: exp})
+	c.items[key] = el
+	return nil
 }
 
-// removeKey 从keys列表中删除键
-func (c *LRUCache) removeKey(key string) {
-	for i, k := range c.keys {
-		if k == key {
-			c.keys = append(c.keys[:i], c.keys[i+1:]...)
-			break
-		}
-	}
+func (c *LRUCache) removeElement(el *list.Element) {
+	entry := el.Value.(*cacheEntry)
+	delete(c.items, entry.key)
+	c.order.Remove(el)
 }
 
-// cleanup 清理过期项
-func (c *LRUCache) cleanup(now int64) {
-	for key, entry := range c.cache {
-		if entry.expiration > 0 && now > entry.expiration {
-			delete(c.cache, key)
-			c.removeKey(key)
-		}
-	}
-}
-
-// ShardedCache 分片缓存，用于减少锁竞争
+// ShardedCache 分片缓存。
 type ShardedCache struct {
-	shards [16]*LRUCache // 16个分片
+	shards [16]*LRUCache
 }
 
-// NewShardedCache 创建一个新的分片缓存
-func NewShardedCache(shardCapacity int, ttl int64) *ShardedCache {
+// NewShardedCache 创建分片缓存。
+func NewShardedCache(shardCapacity int, ttl time.Duration) (*ShardedCache, error) {
 	sc := &ShardedCache{}
 	for i := 0; i < 16; i++ {
-		sc.shards[i] = NewLRUCache(shardCapacity, ttl)
+		cache, err := NewLRUCache(shardCapacity, ttl)
+		if err != nil {
+			return nil, err
+		}
+		sc.shards[i] = cache
 	}
-	return sc
+	return sc, nil
 }
 
-// getShard 获取键对应的分片
 func (sc *ShardedCache) getShard(key string) *LRUCache {
-	// 简单的哈希函数，用于确定分片
 	var sum uint32
 	for i := 0; i < len(key); i++ {
 		sum += uint32(key[i])
@@ -216,23 +190,25 @@ func (sc *ShardedCache) getShard(key string) *LRUCache {
 }
 
 // Get 从分片缓存获取值
-func (sc *ShardedCache) Get(key string) (interface{}, bool) {
+func (sc *ShardedCache) Get(key string) (any, bool) {
 	return sc.getShard(key).Get(key)
 }
 
 // Put 设置分片缓存值
-func (sc *ShardedCache) Put(key string, value interface{}) {
-	sc.getShard(key).Put(key, value)
+func (sc *ShardedCache) Put(key string, value any) error {
+	return sc.getShard(key).Put(key, value)
 }
 
-// 创建分片缓存实例
-var (
-	// 1小时过期时间，每个分片容量1000
-	isBrowserCache   = NewShardedCache(1000, 3600)
-	browserInfoCache = NewShardedCache(1000, 3600)
-)
+var browserInfoCache *ShardedCache
 
-// fastBrowserCheck 快速检查字符串中是否包含浏览器标识
+func init() {
+	cache, err := NewShardedCache(1000, time.Hour)
+	if err != nil {
+		panic(err)
+	}
+	browserInfoCache = cache
+}
+
 func fastBrowserCheck(ua string) bool {
 	for browser := range commonBrowserIdentifiers {
 		if strings.Contains(ua, browser) {
@@ -242,7 +218,6 @@ func fastBrowserCheck(ua string) bool {
 	return false
 }
 
-// fastBotCheck 快速检查字符串中是否包含爬虫标识
 func fastBotCheck(ua string) bool {
 	for bot := range botIdentifiers {
 		if strings.Contains(ua, bot) {
@@ -252,80 +227,56 @@ func fastBotCheck(ua string) bool {
 	return false
 }
 
-// IsBrowser 快速检查是否为浏览器请求
-func IsBrowser(userAgent string) bool {
+func parseBrowserInfo(userAgent string) BrowserInfo {
 	if userAgent == "" {
-		return false
+		return BrowserInfo{}
 	}
-
-	// 检查缓存
-	if result, ok := isBrowserCache.Get(userAgent); ok {
-		return result.(bool)
-	}
-
-	// 转为小写（只进行一次转换）
 	ua := strings.ToLower(userAgent)
-
-	// 检查是否为爬虫或机器人
 	if fastBotCheck(ua) {
-		isBrowserCache.Put(userAgent, false)
-		return false
+		return BrowserInfo{IsBrowser: false}
 	}
-
-	// 检查是否包含任一浏览器标识
-	isBrowser := fastBrowserCheck(ua)
-	isBrowserCache.Put(userAgent, isBrowser)
-	return isBrowser
+	switch {
+	case strings.Contains(ua, "edg/") || strings.Contains(ua, "edge/"):
+		return extractBrowserInfo(userAgent, "Edge", edgeRegex)
+	case strings.Contains(ua, "opr/"):
+		return extractBrowserInfo(userAgent, "Opera", operaRegex)
+	case chromeRegex.MatchString(userAgent) && !strings.Contains(ua, "edg/") && !strings.Contains(ua, "opr/"):
+		return extractBrowserInfo(userAgent, "Chrome", chromeRegex)
+	case firefoxRegex.MatchString(userAgent):
+		return extractBrowserInfo(userAgent, "Firefox", firefoxRegex)
+	case ieRegex.MatchString(userAgent):
+		return extractBrowserInfo(userAgent, "Internet Explorer", ieRegex)
+	case strings.Contains(ua, "safari/") && !strings.Contains(ua, "chrome/"):
+		if versionRegex.MatchString(userAgent) {
+			return extractBrowserInfo(userAgent, "Safari", versionRegex)
+		}
+		return extractBrowserInfo(userAgent, "Safari", safariRegex)
+	default:
+		if fastBrowserCheck(ua) {
+			return BrowserInfo{IsBrowser: true, Name: "Unknown"}
+		}
+		return BrowserInfo{IsBrowser: false}
+	}
 }
 
-// GetBrowserInfo 获取详细的浏览器信息
+// IsBrowser 返回启发式识别结果，不是安全判定。
+func IsBrowser(userAgent string) bool {
+	return GetBrowserInfo(userAgent).IsBrowser
+}
+
+// GetBrowserInfo 获取启发式浏览器信息。
 func GetBrowserInfo(userAgent string) BrowserInfo {
 	if userAgent == "" {
 		return BrowserInfo{IsBrowser: false}
 	}
-
-	// 检查缓存
 	if result, ok := browserInfoCache.Get(userAgent); ok {
 		return result.(BrowserInfo)
 	}
-
-	// 转为小写（只进行一次转换用于bot检查）
-	ua := strings.ToLower(userAgent)
-
-	// 检查是否为爬虫或机器人
-	if fastBotCheck(ua) {
-		result := BrowserInfo{IsBrowser: false}
-		browserInfoCache.Put(userAgent, result)
-		return result
-	}
-
-	// 按优先级检查浏览器类型 - 仅对原始字符串执行正则
-	var result BrowserInfo
-	switch {
-	case edgeRegex.MatchString(userAgent):
-		result = extractBrowserInfo(userAgent, "Edge", edgeRegex)
-	case operaRegex.MatchString(userAgent):
-		result = extractBrowserInfo(userAgent, "Opera", operaRegex)
-	case chromeRegex.MatchString(userAgent):
-		if !safariRegex.MatchString(userAgent) || !edgeRegex.MatchString(userAgent) && !operaRegex.MatchString(userAgent) {
-			result = extractBrowserInfo(userAgent, "Chrome", chromeRegex)
-		}
-	case firefoxRegex.MatchString(userAgent):
-		result = extractBrowserInfo(userAgent, "Firefox", firefoxRegex)
-	case ieRegex.MatchString(userAgent):
-		result = extractBrowserInfo(userAgent, "Internet Explorer", ieRegex)
-	case safariRegex.MatchString(userAgent) && !chromeRegex.MatchString(userAgent):
-		result = extractBrowserInfo(userAgent, "Safari", safariRegex)
-	default:
-		result = BrowserInfo{IsBrowser: fastBrowserCheck(ua)}
-	}
-
-	// 存入缓存
-	browserInfoCache.Put(userAgent, result)
+	result := parseBrowserInfo(userAgent)
+	_ = browserInfoCache.Put(userAgent, result)
 	return result
 }
 
-// extractBrowserInfo 从User-Agent中提取浏览器版本信息
 func extractBrowserInfo(userAgent, browserName string, regex *regexp.Regexp) BrowserInfo {
 	match := regex.FindString(userAgent)
 	version := ""
@@ -335,10 +286,5 @@ func extractBrowserInfo(userAgent, browserName string, regex *regexp.Regexp) Bro
 			version = parts[1]
 		}
 	}
-
-	return BrowserInfo{
-		IsBrowser: true,
-		Name:      browserName,
-		Version:   version,
-	}
+	return BrowserInfo{IsBrowser: true, Name: browserName, Version: version}
 }

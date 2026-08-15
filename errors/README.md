@@ -201,7 +201,7 @@ err.WithMsg("新消息") // 修改消息（返回新对象）
 
 ```go
 data, _ := err.MarshalJSON()
-// {"code":500001,"msg":"数据库错误","cause":"connection refused"}
+// {"code":500001,"msg":"数据库错误"}
 ```
 
 ---

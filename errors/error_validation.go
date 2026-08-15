@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"net/mail"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ValidationError represents a validation error with field-specific information
@@ -40,6 +42,8 @@ func (ve *ValidationError) WithParams(params interface{}) *ValidationError {
 }
 
 // Validator provides validation methods
+//
+// Deprecated: 新代码应使用业务层校验，而不是本包 Validator。
 type Validator struct {
 	errors []*ValidationError
 }
@@ -116,7 +120,7 @@ func (v *Validator) Required(field string, value interface{}) *Validator {
 
 // MinLength validates minimum string length
 func (v *Validator) MinLength(field string, value string, min int) *Validator {
-	if len(value) < min {
+	if runeLength(value) < min {
 		v.AddError(NewValidationError(field, "min_length",
 			fmt.Sprintf("Field '%s' must be at least %d characters long", field, min), value).
 			WithParams(map[string]interface{}{"min": min}))
@@ -126,7 +130,7 @@ func (v *Validator) MinLength(field string, value string, min int) *Validator {
 
 // MaxLength validates maximum string length
 func (v *Validator) MaxLength(field string, value string, max int) *Validator {
-	if len(value) > max {
+	if runeLength(value) > max {
 		v.AddError(NewValidationError(field, "max_length",
 			fmt.Sprintf("Field '%s' must be at most %d characters long", field, max), value).
 			WithParams(map[string]interface{}{"max": max}))
@@ -136,7 +140,7 @@ func (v *Validator) MaxLength(field string, value string, max int) *Validator {
 
 // Length validates exact string length
 func (v *Validator) Length(field string, value string, length int) *Validator {
-	if len(value) != length {
+	if runeLength(value) != length {
 		v.AddError(NewValidationError(field, "length",
 			fmt.Sprintf("Field '%s' must be exactly %d characters long", field, length), value).
 			WithParams(map[string]interface{}{"length": length}))
@@ -238,7 +242,7 @@ func (v *Validator) Range(field string, value float64, min, max float64) *Valida
 func (v *Validator) In(field string, value interface{}, allowed []interface{}) *Validator {
 	found := false
 	for _, item := range allowed {
-		if value == item {
+		if reflect.DeepEqual(value, item) {
 			found = true
 			break
 		}
@@ -254,7 +258,7 @@ func (v *Validator) In(field string, value interface{}, allowed []interface{}) *
 // NotIn validates that a value is not in a list of forbidden values
 func (v *Validator) NotIn(field string, value interface{}, forbidden []interface{}) *Validator {
 	for _, item := range forbidden {
-		if value == item {
+		if reflect.DeepEqual(value, item) {
 			v.AddError(NewValidationError(field, "not_in",
 				fmt.Sprintf("Field '%s' contains a forbidden value", field), value).
 				WithParams(map[string]interface{}{"forbidden": forbidden}))
@@ -307,26 +311,34 @@ func (v *Validator) Custom(field string, value interface{}, rule string, validat
 // Helper functions
 
 // isEmpty checks if a value is considered empty
+func runeLength(value string) int {
+	return utf8.RuneCountInString(value)
+}
+
 func isEmpty(value interface{}) bool {
 	if value == nil {
 		return true
 	}
-
-	switch v := value.(type) {
-	case string:
-		return strings.TrimSpace(v) == ""
-	case []interface{}:
-		return len(v) == 0
-	case map[string]interface{}:
-		return len(v) == 0
-	case int, int8, int16, int32, int64:
-		return v == 0
-	case uint, uint8, uint16, uint32, uint64:
-		return v == 0
-	case float32, float64:
-		return v == 0
-	case bool:
-		return !v
+	val := reflect.ValueOf(value)
+	switch val.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Slice, reflect.Map, reflect.Chan, reflect.Func:
+		if val.IsNil() {
+			return true
+		}
+	}
+	switch val.Kind() {
+	case reflect.String:
+		return strings.TrimSpace(val.String()) == ""
+	case reflect.Array, reflect.Slice, reflect.Map:
+		return val.Len() == 0
+	case reflect.Bool:
+		return !val.Bool()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return val.Int() == 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return val.Uint() == 0
+	case reflect.Float32, reflect.Float64:
+		return val.Float() == 0
 	default:
 		return false
 	}
@@ -354,7 +366,7 @@ func ValidateEmail(field string, value string) *ValidationError {
 
 // ValidateLength validates string length
 func ValidateLength(field string, value string, min, max int) *ValidationError {
-	length := len(value)
+	length := runeLength(value)
 	if length < min {
 		return NewValidationError(field, "min_length",
 			fmt.Sprintf("Field '%s' must be at least %d characters long", field, min), value).

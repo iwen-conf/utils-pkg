@@ -8,30 +8,30 @@ const (
 	CodeUnavailable   = "SERVICE_UNAVAILABLE"
 	CodeNotFound      = "NOT_FOUND"
 	CodeAlreadyExists = "ALREADY_EXISTS"
-	
+
 	// 认证和授权错误
 	CodeUnauthorized = "UNAUTHORIZED"
 	CodeForbidden    = "FORBIDDEN"
 	CodeInvalidToken = "INVALID_TOKEN"
 	CodeExpiredToken = "EXPIRED_TOKEN"
-	
+
 	// 验证错误
 	CodeInvalidInput  = "INVALID_INPUT"
 	CodeMissingField  = "MISSING_FIELD"
 	CodeInvalidFormat = "INVALID_FORMAT"
 	CodeOutOfRange    = "OUT_OF_RANGE"
 	CodeInvalidLength = "INVALID_LENGTH"
-	
+
 	// 网络和外部服务错误
 	CodeNetworkError    = "NETWORK_ERROR"
 	CodeConnectionError = "CONNECTION_ERROR"
 	CodeExternalService = "EXTERNAL_SERVICE_ERROR"
-	
+
 	// 数据库错误
 	CodeDatabaseError    = "DATABASE_ERROR"
 	CodeQueryError       = "QUERY_ERROR"
 	CodeTransactionError = "TRANSACTION_ERROR"
-	
+
 	// 业务逻辑错误
 	CodeBusinessRule      = "BUSINESS_RULE_VIOLATION"
 	CodeInsufficientFunds = "INSUFFICIENT_FUNDS"
@@ -62,6 +62,8 @@ const (
 )
 
 // ErrorType 表示带有默认值的预定义错误类型
+//
+// Deprecated: 新代码请使用 RichError 业务码。
 type ErrorType struct {
 	Code     string
 	Message  string
@@ -78,21 +80,21 @@ var (
 		Severity: SeverityCritical,
 		Category: CategorySystem,
 	}
-	
+
 	TimeoutError = ErrorType{
 		Code:     CodeTimeout,
 		Message:  "操作超时",
 		Severity: SeverityHigh,
 		Category: CategorySystem,
 	}
-	
+
 	NotFoundError = ErrorType{
 		Code:     CodeNotFound,
 		Message:  "资源未找到",
 		Severity: SeverityMedium,
 		Category: CategorySystem,
 	}
-	
+
 	// 认证错误类型
 	UnauthorizedError = ErrorType{
 		Code:     CodeUnauthorized,
@@ -100,14 +102,14 @@ var (
 		Severity: SeverityHigh,
 		Category: CategoryAuth,
 	}
-	
+
 	ForbiddenError = ErrorType{
 		Code:     CodeForbidden,
 		Message:  "访问被拒绝",
 		Severity: SeverityHigh,
 		Category: CategoryAuth,
 	}
-	
+
 	// 验证错误类型
 	InvalidInputError = ErrorType{
 		Code:     CodeInvalidInput,
@@ -115,14 +117,14 @@ var (
 		Severity: SeverityMedium,
 		Category: CategoryValidation,
 	}
-	
+
 	MissingFieldError = ErrorType{
 		Code:     CodeMissingField,
 		Message:  "缺少必填字段",
 		Severity: SeverityMedium,
 		Category: CategoryValidation,
 	}
-	
+
 	// 网络错误类型
 	NetworkError = ErrorType{
 		Code:     CodeNetworkError,
@@ -130,7 +132,7 @@ var (
 		Severity: SeverityHigh,
 		Category: CategoryNetwork,
 	}
-	
+
 	// 数据库错误类型
 	DatabaseError = ErrorType{
 		Code:     CodeDatabaseError,

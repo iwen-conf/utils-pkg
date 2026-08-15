@@ -22,8 +22,10 @@ var (
 	ErrInvalidSignature = errors.New("pagination: invalid cursor signature")
 	// ErrEmptyHMACKey HMAC 密钥为空
 	ErrEmptyHMACKey = errors.New("pagination: HMAC key cannot be empty")
-	// ErrHMACKeyTooShort HMAC 密钥长度不足（建议 >= 32 字节）
-	ErrHMACKeyTooShort = errors.New("pagination: HMAC key too short, recommend at least 32 bytes")
+	// ErrHMACKeyTooShort HMAC 密钥长度不足 32 字节
+	ErrHMACKeyTooShort = errors.New("pagination: HMAC key too short, must be at least 32 bytes")
+	// ErrUninitializedHMACCodec 表示 nil、零值或未完成构造的 codec
+	ErrUninitializedHMACCodec = errors.New("pagination: HMAC codec is not initialized")
 )
 
 // CursorRequest 表示基于游标的分页请求参数。
@@ -99,29 +101,35 @@ func (Base64JSONCodec) Decode(s string, v any) error {
 // 格式：v1.{payload}.{sig}
 // 请使用 NewHMACCodec 构造，不要直接创建零值。
 type HMACCodec struct {
-	key   []byte        // 私有字段，防止外部修改
+	key   []byte // 私有字段，防止外部修改
 	inner CursorCodec
 }
 
 // NewHMACCodec 创建带 HMAC-SHA256 签名的游标编解码器。
-// key 为签名密钥，建议长度 >= 32 字节。若 key 长度不足会返回警告错误（但仍可使用）。
+// key 必须至少 32 字节；失败时返回 nil codec。
 func NewHMACCodec(key []byte) (*HMACCodec, error) {
 	if len(key) == 0 {
 		return nil, ErrEmptyHMACKey
 	}
-	codec := &HMACCodec{
-		key:   key,
-		inner: Base64JSONCodec{},
-	}
 	if len(key) < RecommendedHMACKeySize {
-		return codec, ErrHMACKeyTooShort // 返回警告但不阻止创建
+		return nil, ErrHMACKeyTooShort
 	}
-	return codec, nil
+	return &HMACCodec{
+		key:   append([]byte(nil), key...),
+		inner: Base64JSONCodec{},
+	}, nil
+}
+
+func (c *HMACCodec) validate() error {
+	if c == nil || c.inner == nil || len(c.key) < RecommendedHMACKeySize {
+		return ErrUninitializedHMACCodec
+	}
+	return nil
 }
 
 func (c *HMACCodec) Encode(v any) (string, error) {
-	if c.inner == nil {
-		c.inner = Base64JSONCodec{}
+	if err := c.validate(); err != nil {
+		return "", err
 	}
 	payload, err := c.inner.Encode(v)
 	if err != nil {
@@ -141,8 +149,8 @@ func (c *HMACCodec) Encode(v any) (string, error) {
 }
 
 func (c *HMACCodec) Decode(s string, v any) error {
-	if c.inner == nil {
-		c.inner = Base64JSONCodec{}
+	if err := c.validate(); err != nil {
+		return err
 	}
 	parts := strings.Split(s, ".")
 	if len(parts) != 3 || parts[0] != "v1" {

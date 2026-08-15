@@ -1,7 +1,10 @@
 package useragent
 
 import (
+	"errors"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestIsBrowser(t *testing.T) {
@@ -70,7 +73,7 @@ func TestGetBrowserInfo(t *testing.T) {
 		{
 			name:      "Safari Browser",
 			userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15",
-			want:      BrowserInfo{IsBrowser: true, Name: "Safari", Version: "605.1.15"},
+			want:      BrowserInfo{IsBrowser: true, Name: "Safari", Version: "14.1.1"},
 		},
 		{
 			name:      "Edge Browser",
@@ -97,6 +100,69 @@ func TestGetBrowserInfo(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIsBrowserMatchesGetBrowserInfo(t *testing.T) {
+	uas := []string{
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 OPR/77.0.4054.172",
+		"Mozilla/5.0 (Windows NT 10.0; Trident/7.0; rv:11.0) like Gecko",
+		"curl/8.0.1",
+		"Googlebot/2.1 (+http://www.google.com/bot.html)",
+	}
+	for _, ua := range uas {
+		if IsBrowser(ua) != GetBrowserInfo(ua).IsBrowser {
+			t.Fatalf("IsBrowser mismatch for %q", ua)
+		}
+	}
+}
+
+func TestLRUCache_CapacityAndTTL(t *testing.T) {
+	if _, err := NewLRUCache(0, time.Second); !errors.Is(err, ErrInvalidCacheCapacity) {
+		t.Fatalf("capacity 0: %v", err)
+	}
+	if _, err := NewLRUCache(1, -time.Second); !errors.Is(err, ErrInvalidCacheTTL) {
+		t.Fatalf("negative ttl: %v", err)
+	}
+	cache, err := NewLRUCache(1, 20*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Put("a", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Put("b", 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cache.Get("a"); ok {
+		t.Fatalf("capacity 1 should evict a")
+	}
+	time.Sleep(30 * time.Millisecond)
+	if _, ok := cache.Get("b"); ok {
+		t.Fatalf("ttl expired")
+	}
+	var nilCache *LRUCache
+	if _, ok := nilCache.Get("x"); ok {
+		t.Fatalf("nil get")
+	}
+	if err := nilCache.Put("x", 1); !errors.Is(err, ErrUninitializedCache) {
+		t.Fatalf("nil put: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	live, err := NewLRUCache(8, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_ = live.Put("k", i)
+			_, _ = live.Get("k")
+		}(i)
+	}
+	wg.Wait()
 }
 
 func BenchmarkIsBrowser(b *testing.B) {

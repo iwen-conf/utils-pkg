@@ -3,9 +3,18 @@ package crypto
 import (
 	"crypto/rand"
 	"errors"
+	"fmt"
 
 	"golang.org/x/crypto/bcrypt"
 )
+
+const (
+	// MaxRandomBytesLength 是 GenerateRandomBytes 允许的最大长度。
+	MaxRandomBytesLength = 1 << 20
+)
+
+// ErrInvalidRandomLength 表示随机字节长度非法。
+var ErrInvalidRandomLength = errors.New("invalid random bytes length")
 
 // BcryptCost bcrypt 成本级别
 type BcryptCost int
@@ -36,10 +45,12 @@ func CompareHashAndPassword(hashedPassword, password []byte) error {
 
 // GenerateRandomBytes 生成指定长度的随机字节
 func GenerateRandomBytes(length int) ([]byte, error) {
+	if length <= 0 || length > MaxRandomBytesLength {
+		return nil, fmt.Errorf("%w: must be 1-%d", ErrInvalidRandomLength, MaxRandomBytesLength)
+	}
 	b := make([]byte, length)
-	_, err := rand.Read(b)
-	if err != nil {
-		return nil, err
+	if _, err := rand.Read(b); err != nil {
+		return nil, fmt.Errorf("read random bytes: %w", err)
 	}
 	return b, nil
 }

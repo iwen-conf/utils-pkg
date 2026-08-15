@@ -125,24 +125,9 @@ func TestTokenManager_ValidateToken(t *testing.T) {
 
 func TestStandardClaims_UnmarshalJSON_JTINumber(t *testing.T) {
 	var c StandardClaims
-	if err := c.UnmarshalJSON([]byte(`{"sub":"u-1","jti":123,"type":"access","sid":"s-1","foo":"bar"}`)); err != nil {
-		t.Fatalf("UnmarshalJSON error: %v", err)
-	}
-
-	if c.TokenID != "123" {
-		t.Fatalf("Expected TokenID=123, got %q", c.TokenID)
-	}
-	if c.Subject != "u-1" {
-		t.Fatalf("Expected Subject=u-1, got %q", c.Subject)
-	}
-	if c.TokenType != AccessToken {
-		t.Fatalf("Expected TokenType=access, got %q", c.TokenType)
-	}
-	if c.SessionID != "s-1" {
-		t.Fatalf("Expected SessionID=s-1, got %q", c.SessionID)
-	}
-	if v, ok := c.CustomClaims["foo"]; !ok || v != "bar" {
-		t.Fatalf("Expected CustomClaims[foo]=bar, got %v (ok=%v)", v, ok)
+	err := c.UnmarshalJSON([]byte(`{"sub":"u-1","jti":123,"type":"access","sid":"s-1","foo":"bar"}`))
+	if !errors.Is(err, ErrInvalidClaimType) {
+		t.Fatalf("Expected ErrInvalidClaimType for numeric jti, got %v", err)
 	}
 }
 
@@ -449,8 +434,12 @@ func TestTokenManager_GetTokenExpiryConfig(t *testing.T) {
 
 	// 测试通过SetTokenExpiry方法修改配置
 	manager3 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
-	manager3.SetTokenExpiry(AccessToken, 1*time.Hour)
-	manager3.SetTokenExpiry(RefreshToken, 48*time.Hour)
+	if err := manager3.SetTokenExpiry(AccessToken, 1*time.Hour); err != nil {
+		t.Fatalf("SetTokenExpiry access: %v", err)
+	}
+	if err := manager3.SetTokenExpiry(RefreshToken, 48*time.Hour); err != nil {
+		t.Fatalf("SetTokenExpiry refresh: %v", err)
+	}
 
 	config3 := manager3.GetTokenExpiryConfig()
 
@@ -475,9 +464,8 @@ func TestTokenManager_GetAccessTokenExpiry(t *testing.T) {
 	}
 
 	// 测试自定义配置
-	customOptions := &JWTOptions{
-		AccessTokenExpiry: 45 * time.Minute,
-	}
+	customOptions := DefaultJWTOptions()
+	customOptions.AccessTokenExpiry = 45 * time.Minute
 	manager2 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!", customOptions)
 	expiry2 := manager2.GetAccessTokenExpiry()
 
@@ -487,7 +475,9 @@ func TestTokenManager_GetAccessTokenExpiry(t *testing.T) {
 
 	// 测试通过SetTokenExpiry修改
 	manager3 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
-	manager3.SetTokenExpiry(AccessToken, 2*time.Hour)
+	if err := manager3.SetTokenExpiry(AccessToken, 2*time.Hour); err != nil {
+		t.Fatalf("SetTokenExpiry: %v", err)
+	}
 	expiry3 := manager3.GetAccessTokenExpiry()
 
 	if expiry3 != 2*time.Hour {
@@ -507,9 +497,8 @@ func TestTokenManager_GetRefreshTokenExpiry(t *testing.T) {
 	}
 
 	// 测试自定义配置
-	customOptions := &JWTOptions{
-		RefreshTokenExpiry: 3 * 24 * time.Hour, // 3天
-	}
+	customOptions := DefaultJWTOptions()
+	customOptions.RefreshTokenExpiry = 3 * 24 * time.Hour
 	manager2 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!", customOptions)
 	expiry2 := manager2.GetRefreshTokenExpiry()
 
@@ -519,7 +508,9 @@ func TestTokenManager_GetRefreshTokenExpiry(t *testing.T) {
 
 	// 测试通过SetTokenExpiry修改
 	manager3 := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
-	manager3.SetTokenExpiry(RefreshToken, 72*time.Hour)
+	if err := manager3.SetTokenExpiry(RefreshToken, 72*time.Hour); err != nil {
+		t.Fatalf("SetTokenExpiry: %v", err)
+	}
 	expiry3 := manager3.GetRefreshTokenExpiry()
 
 	if expiry3 != 72*time.Hour {

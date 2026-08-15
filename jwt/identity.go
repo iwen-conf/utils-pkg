@@ -282,10 +282,11 @@ func (m *TokenManager) tokenExpiry(tokenType TokenType, options *TokenOptions) t
 	if options != nil && options.ExpiresIn > 0 {
 		return options.ExpiresIn
 	}
+	snap := m.snapshotConfig()
 	if tokenType == RefreshToken {
-		return m.refreshTokenExpiry
+		return snap.refreshTokenExpiry
 	}
-	return m.accessTokenExpiry
+	return snap.accessTokenExpiry
 }
 
 func putClaim(claims map[string]interface{}, key string, value interface{}) error {

@@ -105,10 +105,11 @@ func TestStandardClaims_UnmarshalJSON_InvalidJSON(t *testing.T) {
 }
 
 func TestNewTokenManager_KeyHasUpper(t *testing.T) {
-	_, err := NewTokenManager("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-	if err == nil {
-		t.Fatalf("Expected error for insufficient character variety")
+	tm, err := NewTokenManager("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	if err != nil {
+		t.Fatalf("32-byte uniform secret should be accepted: %v", err)
 	}
+	tm.Shutdown()
 }
 
 func TestMustNewTokenManager_Panics(t *testing.T) {
@@ -129,12 +130,16 @@ func TestTokenManager_SettersAndHelpers(t *testing.T) {
 		t.Fatalf("Expected enableCache=false")
 	}
 
-	tm.SetCacheSize(7)
+	if err := tm.SetCacheSize(7); err != nil {
+		t.Fatalf("SetCacheSize: %v", err)
+	}
 	if tm.cacheSize != 7 {
 		t.Fatalf("Expected cacheSize=7, got %d", tm.cacheSize)
 	}
 
-	tm.SetCacheTTL(2 * time.Second)
+	if err := tm.SetCacheTTL(2 * time.Second); err != nil {
+		t.Fatalf("SetCacheTTL: %v", err)
+	}
 	if tm.cacheTTL != 2*time.Second {
 		t.Fatalf("Expected cacheTTL=2s, got %v", tm.cacheTTL)
 	}
@@ -230,10 +235,12 @@ func TestTokenManager_RefreshToken_GenerateTokenFailure(t *testing.T) {
 
 func TestTokenManager_checkCache_ExpiredItemIsRemoved(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
-	tm.SetCacheTTL(time.Millisecond)
+	if err := tm.SetCacheTTL(time.Millisecond); err != nil {
+		t.Fatalf("SetCacheTTL: %v", err)
+	}
 
 	tm.cacheLock.Lock()
-	tm.cache["k"] = cacheItem{timestamp: time.Now().Add(-time.Second)}
+	tm.cache["k"] = cacheItem{timestamp: time.Now().Add(-time.Second), validUntil: time.Now().Add(-time.Millisecond)}
 	tm.cacheLock.Unlock()
 
 	_, _, found := tm.checkCache("k")
@@ -255,7 +262,7 @@ func TestTokenManager_checkCache_LogPathShortToken(t *testing.T) {
 
 	c := &StandardClaims{RegisteredClaims: jwt.RegisteredClaims{Subject: "u-1"}}
 	tm.cacheLock.Lock()
-	tm.cache["short"] = cacheItem{claims: c, timestamp: time.Now()}
+	tm.cache["short"] = cacheItem{claims: c, timestamp: time.Now(), validUntil: time.Now().Add(time.Minute)}
 	tm.cacheLock.Unlock()
 
 	claims, err, found := tm.checkCache("short")
@@ -269,17 +276,21 @@ func TestTokenManager_checkCache_LogPathShortToken(t *testing.T) {
 
 func TestTokenManager_cacheResult_EvictsOldest(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
-	tm.SetCacheSize(5)
+	if err := tm.SetCacheSize(5); err != nil {
+		t.Fatalf("SetCacheSize: %v", err)
+	}
 
 	tm.cacheLock.Lock()
-	tm.cache["old"] = cacheItem{timestamp: time.Now().Add(-time.Hour)}
-	tm.cache["new"] = cacheItem{timestamp: time.Now()}
-	tm.cache["mid"] = cacheItem{timestamp: time.Now().Add(-time.Minute)}
-	tm.cache["x"] = cacheItem{timestamp: time.Now().Add(-2 * time.Minute)}
-	tm.cache["y"] = cacheItem{timestamp: time.Now().Add(-3 * time.Minute)}
+	tm.cache["old"] = cacheItem{timestamp: time.Now().Add(-time.Hour), validUntil: time.Now().Add(time.Hour)}
+	tm.cache["new"] = cacheItem{timestamp: time.Now(), validUntil: time.Now().Add(time.Hour)}
+	tm.cache["mid"] = cacheItem{timestamp: time.Now().Add(-time.Minute), validUntil: time.Now().Add(time.Hour)}
+	tm.cache["x"] = cacheItem{timestamp: time.Now().Add(-2 * time.Minute), validUntil: time.Now().Add(time.Hour)}
+	tm.cache["y"] = cacheItem{timestamp: time.Now().Add(-3 * time.Minute), validUntil: time.Now().Add(time.Hour)}
 	tm.cacheLock.Unlock()
 
-	tm.cacheResult("z", nil, nil)
+	if err := tm.cacheResult("z", nil, errors.New("neg")); err != nil {
+		t.Fatalf("cacheResult: %v", err)
+	}
 
 	tm.cacheLock.RLock()
 	_, ok := tm.cache["old"]
@@ -293,7 +304,7 @@ func TestTokenManager_evictOldestCache_EarlyReturn(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 
 	tm.cacheLock.Lock()
-	tm.cache["k"] = cacheItem{timestamp: time.Now()}
+	tm.cache["k"] = cacheItem{timestamp: time.Now(), validUntil: time.Now().Add(time.Minute)}
 	tm.cacheLock.Unlock()
 
 	tm.cacheLock.Lock()
@@ -305,8 +316,8 @@ func TestTokenManager_evictOldestCache_CountOverLen(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 
 	tm.cacheLock.Lock()
-	tm.cache["a"] = cacheItem{timestamp: time.Now().Add(-time.Minute)}
-	tm.cache["b"] = cacheItem{timestamp: time.Now()}
+	tm.cache["a"] = cacheItem{timestamp: time.Now().Add(-time.Minute), validUntil: time.Now().Add(time.Minute)}
+	tm.cache["b"] = cacheItem{timestamp: time.Now(), validUntil: time.Now().Add(time.Minute)}
 	tm.evictOldestCache(10)
 	_, okA := tm.cache["a"]
 	_, okB := tm.cache["b"]
@@ -320,11 +331,13 @@ func TestTokenManager_evictOldestCache_CountOverLen(t *testing.T) {
 func TestTokenManager_cleanCache_RemovesExpired(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	tm.EnableLog(true)
-	tm.SetCacheTTL(time.Millisecond)
+	if err := tm.SetCacheTTL(time.Millisecond); err != nil {
+		t.Fatalf("SetCacheTTL: %v", err)
+	}
 
 	tm.cacheLock.Lock()
-	tm.cache["old"] = cacheItem{timestamp: time.Now().Add(-time.Second)}
-	tm.cache["new"] = cacheItem{timestamp: time.Now()}
+	tm.cache["old"] = cacheItem{timestamp: time.Now().Add(-time.Second), validUntil: time.Now().Add(-time.Millisecond)}
+	tm.cache["new"] = cacheItem{timestamp: time.Now(), validUntil: time.Now().Add(time.Minute)}
 	tm.cacheLock.Unlock()
 
 	tm.cleanCache()
@@ -485,11 +498,15 @@ func TestTokenManager_startCleanupRoutine_TickAndStop(t *testing.T) {
 	}
 
 	tm.EnableLog(true)
-	tm.SetCacheTTL(time.Millisecond)
-	tm.SetCacheSize(10)
+	if err := tm.SetCacheTTL(time.Millisecond); err != nil {
+		t.Fatalf("SetCacheTTL: %v", err)
+	}
+	if err := tm.SetCacheSize(10); err != nil {
+		t.Fatalf("SetCacheSize: %v", err)
+	}
 
 	tm.cacheLock.Lock()
-	tm.cache["old"] = cacheItem{timestamp: time.Now().Add(-time.Second)}
+	tm.cache["old"] = cacheItem{timestamp: time.Now().Add(-time.Second), validUntil: time.Now().Add(-time.Millisecond)}
 	tm.cacheLock.Unlock()
 
 	tokenStr := "ffffffffff.gggggggggg.hhhhhhhhhh"
@@ -534,7 +551,7 @@ func TestTokenManager_EnableCache_AndLogf(t *testing.T) {
 	tm.EnableCache(true)
 
 	tm.cacheLock.Lock()
-	tm.cache["short"] = cacheItem{err: errors.New("cached"), timestamp: time.Now()}
+	tm.cache["short"] = cacheItem{err: errors.New("cached"), timestamp: time.Now(), validUntil: time.Now().Add(time.Minute)}
 	tm.cacheLock.Unlock()
 
 	_, err := tm.ValidateToken("short")

@@ -91,26 +91,14 @@ func (e *RichError) GetStatus() Status {
 	return e.Status
 }
 
-// MarshalJSON 实现 JSON 序列化，用于日志输出
-// 输出格式: {"code":500001,"msg":"xxx","cause":"原始错误"}
+// MarshalJSON 序列化安全响应字段，只输出 code 和 msg。
 func (e *RichError) MarshalJSON() ([]byte, error) {
 	if e == nil {
 		return []byte("null"), nil
 	}
-
 	type jsonError struct {
-		Code  int    `json:"code"`
-		Msg   string `json:"msg"`
-		Cause string `json:"cause,omitempty"`
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
 	}
-
-	je := jsonError{
-		Code: e.Code,
-		Msg:  e.Msg,
-	}
-	if e.cause != nil {
-		je.Cause = e.cause.Error()
-	}
-
-	return json.Marshal(je)
+	return json.Marshal(jsonError{Code: e.Code, Msg: e.Msg})
 }

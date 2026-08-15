@@ -10,10 +10,10 @@ type OffsetRequest struct {
 
 // OffsetResponse 为基于偏移量的分页响应元信息。
 type OffsetResponse struct {
-	Offset int   `json:"offset"`           // 当前偏移量
-	Limit  int   `json:"limit"`            // 每页条数
-	Total  int64 `json:"total"`            // 总记录数
-	HasMore bool `json:"has_more"`         // 是否还有更多数据
+	Offset  int   `json:"offset"`   // 当前偏移量
+	Limit   int   `json:"limit"`    // 每页条数
+	Total   int64 `json:"total"`    // 总记录数
+	HasMore bool  `json:"has_more"` // 是否还有更多数据
 }
 
 // Normalize 对请求的 Offset 和 Limit 进行归一化（默认值与上限钳制）。

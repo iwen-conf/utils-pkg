@@ -46,7 +46,7 @@ import (
 
 // Error 表示一个全面的错误，包含错误码、消息、详情、时间戳、上下文信息和错误链支持。
 //
-// Error结构体实现了标准error接口，并为应用程序中的结构化错误处理提供了额外功能。
+// Deprecated: 新代码请使用 NewRich / WrapRich 与标准 errors.Is/As。
 type Error struct {
 	Code      string                 `json:"code"`      // 错误码 - 用于程序化处理错误
 	Message   string                 `json:"message"`   // 错误消息 - 人类可读的错误描述

@@ -71,7 +71,6 @@ func TestAESEncryptor_EncryptDecrypt(t *testing.T) {
 	}
 }
 
-
 func TestAESEncryptor_URLSafeEncoding(t *testing.T) {
 	key := make([]byte, 32)
 	// Fill with some entropy to pass validation
@@ -168,7 +167,9 @@ func TestPasswordPolicy(t *testing.T) {
 
 	// 测试设置新的禁用词
 	customWords := []string{"testword", "example"}
-	policy.SetDisallowWords(customWords)
+	if err := policy.SetDisallowWords(customWords); err != nil {
+		t.Fatalf("SetDisallowWords: %v", err)
+	}
 
 	passwordWithCustomDisallowedWord := "Testword123!"
 	if err := policy.ValidatePassword(passwordWithCustomDisallowedWord); err == nil {
@@ -291,7 +292,6 @@ func BenchmarkAESEncryptor_Decrypt(b *testing.B) {
 		_, _ = encryptor.Decrypt(ciphertext)
 	}
 }
-
 
 func BenchmarkHashFunctions(b *testing.B) {
 	data := []byte("test data")
@@ -454,7 +454,7 @@ func TestHashWithArgon2(t *testing.T) {
 
 func TestVerifyArgon2Hash_InvalidFormat(t *testing.T) {
 	password := []byte("test-password")
-	
+
 	// 测试无效格式
 	invalidHashes := []string{
 		"",
@@ -549,7 +549,7 @@ func TestHashWithScrypt(t *testing.T) {
 
 func TestVerifyScryptHash_InvalidFormat(t *testing.T) {
 	password := []byte("test-password")
-	
+
 	// 测试无效格式
 	invalidHashes := []string{
 		"",
@@ -569,10 +569,18 @@ func TestVerifyScryptHash_InvalidFormat(t *testing.T) {
 func TestPasswordHasherInterface(t *testing.T) {
 	password := []byte("test-password-123")
 
+	argonHasher, err := NewArgon2Hasher(DefaultArgon2Params())
+	if err != nil {
+		t.Fatalf("NewArgon2Hasher: %v", err)
+	}
+	scryptHasher, err := NewScryptHasher(DefaultScryptParams())
+	if err != nil {
+		t.Fatalf("NewScryptHasher: %v", err)
+	}
 	hashers := []PasswordHasher{
 		NewBcryptHasher(BcryptCostDefault),
-		NewArgon2Hasher(DefaultArgon2Params()),
-		NewScryptHasher(DefaultScryptParams()),
+		argonHasher,
+		scryptHasher,
 	}
 
 	for _, hasher := range hashers {

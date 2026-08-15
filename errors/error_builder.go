@@ -6,6 +6,8 @@ import (
 )
 
 // New 使用给定的错误码和消息创建新的错误
+//
+// Deprecated: 新代码请使用 NewRich。
 func New(code, message string) *Error {
 	return &Error{
 		Code:      code,
@@ -57,11 +59,11 @@ func FromType(errorType ErrorType) *Error {
 		Timestamp: time.Now(),
 		Context:   make(map[string]interface{}),
 	}
-	
+
 	// 将严重级别和类别添加到上下文
 	err.Context["severity"] = errorType.Severity
 	err.Context["category"] = errorType.Category
-	
+
 	return err
 }
 
@@ -81,15 +83,17 @@ func WrapWithType(err error, errorType ErrorType) *Error {
 		Context:   make(map[string]interface{}),
 		Original:  err,
 	}
-	
+
 	// 将严重级别和类别添加到上下文
 	wrappedErr.Context["severity"] = errorType.Severity
 	wrappedErr.Context["category"] = errorType.Category
-	
+
 	return wrappedErr
 }
 
 // Builder 提供用于构建错误的流式接口
+//
+// Deprecated: 新代码请使用 NewRich / WrapRich。
 type Builder struct {
 	err *Error
 }

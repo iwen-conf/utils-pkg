@@ -94,20 +94,37 @@ func (c *StandardClaims) UnmarshalJSON(data []byte) error {
 		custom[k] = v
 	}
 
-	subject, _ := m.GetSubject()
-	issuer, _ := m.GetIssuer()
-	aud, _ := m.GetAudience()
-	issuedAt, _ := m.GetIssuedAt()
-	expiresAt, _ := m.GetExpirationTime()
-	notBefore, _ := m.GetNotBefore()
+	subject, err := m.GetSubject()
+	if err != nil {
+		return fmt.Errorf("%w: sub: %w", ErrInvalidClaimType, err)
+	}
+	issuer, err := m.GetIssuer()
+	if err != nil {
+		return fmt.Errorf("%w: iss: %w", ErrInvalidClaimType, err)
+	}
+	if err := validateAudienceClaim(m["aud"]); err != nil {
+		return fmt.Errorf("%w: aud: %w", ErrInvalidClaimType, err)
+	}
+	aud, err := m.GetAudience()
+	if err != nil {
+		return fmt.Errorf("%w: aud: %w", ErrInvalidClaimType, err)
+	}
+	issuedAt, err := m.GetIssuedAt()
+	if err != nil {
+		return fmt.Errorf("%w: iat: %w", ErrInvalidClaimType, err)
+	}
+	expiresAt, err := m.GetExpirationTime()
+	if err != nil {
+		return fmt.Errorf("%w: exp: %w", ErrInvalidClaimType, err)
+	}
+	notBefore, err := m.GetNotBefore()
+	if err != nil {
+		return fmt.Errorf("%w: nbf: %w", ErrInvalidClaimType, err)
+	}
 
-	jti := ""
-	if v, ok := m["jti"]; ok {
-		if s, ok := v.(string); ok {
-			jti = s
-		} else if f, ok := v.(float64); ok {
-			jti = fmt.Sprintf("%.0f", f)
-		}
+	jti, err := registeredStringClaim(m, "jti")
+	if err != nil {
+		return err
 	}
 
 	c.RegisteredClaims = jwt.RegisteredClaims{
@@ -121,16 +138,20 @@ func (c *StandardClaims) UnmarshalJSON(data []byte) error {
 	}
 	c.TokenID = jti
 
-	if v, ok := m["type"]; ok {
-		if s, ok := v.(string); ok {
-			c.TokenType = TokenType(s)
+	if _, ok := m["type"]; ok {
+		tokenType, err := registeredStringClaim(m, "type")
+		if err != nil {
+			return err
 		}
+		c.TokenType = TokenType(tokenType)
 		delete(custom, "type")
 	}
-	if v, ok := m["sid"]; ok {
-		if s, ok := v.(string); ok {
-			c.SessionID = s
+	if _, ok := m["sid"]; ok {
+		sessionID, err := registeredStringClaim(m, "sid")
+		if err != nil {
+			return err
 		}
+		c.SessionID = sessionID
 		delete(custom, "sid")
 	}
 
@@ -140,6 +161,34 @@ func (c *StandardClaims) UnmarshalJSON(data []byte) error {
 
 	c.CustomClaims = custom
 	return nil
+}
+
+func validateAudienceClaim(v any) error {
+	switch aud := v.(type) {
+	case nil, string, []string:
+		return nil
+	case []interface{}:
+		for _, item := range aud {
+			if _, ok := item.(string); !ok {
+				return fmt.Errorf("aud contains non-string value")
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("aud is not string or string array")
+	}
+}
+
+func registeredStringClaim(m jwt.MapClaims, name string) (string, error) {
+	v, ok := m[name]
+	if !ok || v == nil {
+		return "", nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("%w: %s is not string", ErrInvalidClaimType, name)
+	}
+	return s, nil
 }
 
 // TokenOptions JWT令牌选项
@@ -188,12 +237,20 @@ type JWTOptions struct {
 	Issuer string
 	// 默认受众
 	Audience []string
+	// ExpectedIssuer 仅用于验证；空值表示不校验 iss。
+	ExpectedIssuer string
+	// ExpectedAudience 仅用于验证；空值表示不校验 aud。
+	ExpectedAudience []string
 	// TokenProfile 定义业务身份字段写入 custom claims 时的标准 key。
 	TokenProfile *TokenProfile
 	// RefreshTokenReuseAction refresh token 被复用(重放)时的动作
 	RefreshTokenReuseAction RefreshTokenReuseAction
 	// RevocationStore 保存 token/session 吊销状态；为空时使用单进程内存实现。
 	RevocationStore RevocationStore
+	// RefreshTokenUseStore 原子消费 refresh jti；为空时使用单进程内存实现。
+	RefreshTokenUseStore RefreshTokenUseStore
+	// ErrorReporter 接收后台与 deprecated API 的存储错误；为空时使用默认摘要 reporter。
+	ErrorReporter func(error)
 }
 
 // DefaultJWTOptions 返回默认的JWT管理器选项
@@ -210,112 +267,79 @@ func DefaultJWTOptions() *JWTOptions {
 	}
 }
 
-// cacheItem 缓存项结构
+// cacheItem 缓存项结构。timestamp 仅用于 LRU 淘汰，安全有效期看 validUntil。
 type cacheItem struct {
-	claims    *StandardClaims
-	err       error
-	timestamp time.Time
+	claims     *StandardClaims
+	err        error
+	timestamp  time.Time
+	validUntil time.Time
 }
 
 // TokenManager JWT 令牌管理器
 type TokenManager struct {
 	secretKey              []byte
 	revocations            RevocationStore
+	refreshStore           RefreshTokenUseStore
 	blacklistCleanInterval time.Duration
-	refreshJTISegments     int
-
-	// refresh token 复用检测（单实例内存版）
-	usedRefreshJTIs     []map[string]time.Time
-	usedRefreshJTIsLock []*sync.RWMutex
 
 	// 令牌验证结果缓存
 	cache     map[string]cacheItem
 	cacheLock sync.RWMutex
-	cacheSize int
-	cacheTTL  time.Duration
 
 	// 清理吊销记录和内部缓存的定时器
 	cleanupTicker *time.Ticker
 	stopCleanup   chan struct{}
+	shutdownOnce  sync.Once
 
-	// 令牌过期时间设置
-	accessTokenExpiry  time.Duration
-	refreshTokenExpiry time.Duration
-
-	issuer       string
-	audience     []string
 	tokenProfile TokenProfile
 
-	// 选项
+	configMu                sync.RWMutex
+	cacheSize               int
+	cacheTTL                time.Duration
+	accessTokenExpiry       time.Duration
+	refreshTokenExpiry      time.Duration
+	issuer                  string
+	audience                []string
+	expectedIssuer          string
+	expectedAudience        []string
 	enableLog               bool
 	enableCache             bool
 	refreshTokenReuseAction RefreshTokenReuseAction
+	errorReporter           func(error)
 }
 
 // NewTokenManager 创建新的JWT令牌管理器
 func NewTokenManager(secretKey string, options ...*JWTOptions) (*TokenManager, error) {
-	// Validate secret key strength
-	if len(secretKey) < 32 {
-		return nil, errors.New("JWT secret key must be at least 32 characters long for security")
-	}
-
-	// Check key entropy (basic check for character variety)
-	var hasUpper, hasLower, hasNumber, hasSpecial bool
-	for _, c := range secretKey {
-		switch {
-		case c >= 'A' && c <= 'Z':
-			hasUpper = true
-		case c >= 'a' && c <= 'z':
-			hasLower = true
-		case c >= '0' && c <= '9':
-			hasNumber = true
-		default:
-			hasSpecial = true
-		}
-	}
-
-	variety := 0
-	if hasUpper {
-		variety++
-	}
-	if hasLower {
-		variety++
-	}
-	if hasNumber {
-		variety++
-	}
-	if hasSpecial {
-		variety++
-	}
-
-	if variety < 3 {
-		return nil, errors.New("JWT secret key should contain at least 3 different character types (uppercase, lowercase, numbers, special characters)")
+	if len([]byte(secretKey)) < 32 {
+		return nil, fmt.Errorf("%w: got %d bytes", ErrSecretKeyTooShort, len([]byte(secretKey)))
 	}
 
 	opts := DefaultJWTOptions()
 	if len(options) > 0 && options[0] != nil {
 		opts = options[0]
 	}
-
-	const numSegments = 16
-	usedLocks := make([]*sync.RWMutex, numSegments)
-	usedJTIs := make([]map[string]time.Time, numSegments)
-	for i := 0; i < numSegments; i++ {
-		usedLocks[i] = &sync.RWMutex{}
-		usedJTIs[i] = make(map[string]time.Time)
+	if err := validateJWTOptions(opts); err != nil {
+		return nil, err
 	}
+
 	revocations := opts.RevocationStore
 	if revocations == nil {
 		revocations = NewMemoryRevocationStore()
+	}
+	refreshStore := opts.RefreshTokenUseStore
+	if refreshStore == nil {
+		refreshStore = NewMemoryRefreshTokenUseStore()
+	}
+	reporter := opts.ErrorReporter
+	if reporter == nil {
+		reporter = defaultErrorReporter
 	}
 
 	manager := &TokenManager{
 		secretKey:               []byte(secretKey),
 		revocations:             revocations,
+		refreshStore:            refreshStore,
 		blacklistCleanInterval:  opts.BlacklistCleanInterval,
-		refreshJTISegments:      numSegments,
-		usedRefreshJTIs:         usedJTIs,
-		usedRefreshJTIsLock:     usedLocks,
 		cache:                   make(map[string]cacheItem),
 		cacheSize:               opts.CacheSize,
 		cacheTTL:                opts.CacheTTL,
@@ -327,7 +351,10 @@ func NewTokenManager(secretKey string, options ...*JWTOptions) (*TokenManager, e
 		refreshTokenExpiry:      opts.RefreshTokenExpiry,
 		issuer:                  opts.Issuer,
 		audience:                cloneStringSlice(opts.Audience),
+		expectedIssuer:          opts.ExpectedIssuer,
+		expectedAudience:        cloneStringSlice(opts.ExpectedAudience),
 		tokenProfile:            normalizeTokenProfile(opts.TokenProfile),
+		errorReporter:           reporter,
 	}
 
 	if opts.BlacklistCleanInterval > 0 {
@@ -338,6 +365,32 @@ func NewTokenManager(secretKey string, options ...*JWTOptions) (*TokenManager, e
 	return manager, nil
 }
 
+func validateJWTOptions(opts *JWTOptions) error {
+	if opts.AccessTokenExpiry <= 0 {
+		return ErrInvalidAccessTokenExpiry
+	}
+	if opts.RefreshTokenExpiry <= 0 {
+		return ErrInvalidRefreshTokenExpiry
+	}
+	if opts.EnableCache {
+		if opts.CacheSize <= 0 {
+			return ErrInvalidCacheSize
+		}
+		if opts.CacheTTL <= 0 {
+			return ErrInvalidCacheTTL
+		}
+	}
+	if opts.BlacklistCleanInterval < 0 {
+		return ErrInvalidCleanupInterval
+	}
+	switch opts.RefreshTokenReuseAction {
+	case RevokeSessionOnRefreshReuse:
+	default:
+		return ErrUnknownRefreshReuseAction
+	}
+	return nil
+}
+
 // MustNewTokenManager creates a new JWT token manager and panics on error
 // This function maintains backward compatibility with existing code
 func MustNewTokenManager(secretKey string, options ...*JWTOptions) *TokenManager {
@@ -346,77 +399,6 @@ func MustNewTokenManager(secretKey string, options ...*JWTOptions) *TokenManager
 		panic(err)
 	}
 	return manager
-}
-
-func (m *TokenManager) getJTIIndex(jti string) int {
-	var sum int
-	for i := 0; i < len(jti) && i < 10; i++ {
-		sum += int(jti[i])
-	}
-	return sum % m.refreshJTISegments
-}
-
-// consumeRefreshJTI 标记 refresh token 的 jti 为已使用。
-// 返回 true 表示首次使用；false 表示已经用过（疑似重放）。
-func (m *TokenManager) consumeRefreshJTI(jti string, expireAt time.Time) bool {
-	idx := m.getJTIIndex(jti)
-	m.usedRefreshJTIsLock[idx].Lock()
-	defer m.usedRefreshJTIsLock[idx].Unlock()
-
-	if t, ok := m.usedRefreshJTIs[idx][jti]; ok {
-		// 已记录过的 jti，如果记录已过期则视为可再次使用（兜底）。
-		if time.Now().After(t) {
-			m.usedRefreshJTIs[idx][jti] = expireAt
-			return true
-		}
-		return false
-	}
-	m.usedRefreshJTIs[idx][jti] = expireAt
-	return true
-}
-
-func (m *TokenManager) refreshJTIUsed(jti string) bool {
-	if jti == "" {
-		return false
-	}
-	idx := m.getJTIIndex(jti)
-	now := time.Now()
-	m.usedRefreshJTIsLock[idx].RLock()
-	expiresAt, ok := m.usedRefreshJTIs[idx][jti]
-	m.usedRefreshJTIsLock[idx].RUnlock()
-	if !ok {
-		return false
-	}
-	if expiresAt.After(now) {
-		return true
-	}
-	m.usedRefreshJTIsLock[idx].Lock()
-	if current, exists := m.usedRefreshJTIs[idx][jti]; exists && !current.After(now) {
-		delete(m.usedRefreshJTIs[idx], jti)
-	}
-	m.usedRefreshJTIsLock[idx].Unlock()
-	return false
-}
-
-func (m *TokenManager) cleanUsedRefreshJTIs() {
-	if m.cacheTTL <= 0 {
-		// 允许 ttl<=0 的情况仍然清理 jti 表
-	}
-	now := time.Now()
-	cleaned := 0
-	for i := 0; i < m.refreshJTISegments; i++ {
-		m.usedRefreshJTIsLock[i].Lock()
-		for jti, expireAt := range m.usedRefreshJTIs[i] {
-			if now.After(expireAt) {
-				delete(m.usedRefreshJTIs[i], jti)
-				cleaned++
-			}
-		}
-		m.usedRefreshJTIsLock[i].Unlock()
-	}
-	if m.enableLog && cleaned > 0 {
-		m.logf("已清理 %d 条过期的 refresh jti 记录", cleaned)
-	}
 }
 
 func (m *TokenManager) revokeSession(ctx context.Context, sessionID string, expiresAt time.Time) error {
@@ -438,9 +420,15 @@ func (m *TokenManager) startCleanupRoutine() {
 	for {
 		select {
 		case <-m.cleanupTicker.C:
-			m.CleanBlacklist()
-			m.cleanCache()           // 同时清理过期缓存
-			m.cleanUsedRefreshJTIs() // 同时清理过期的 refresh jti 记录
+			if _, err := m.CleanBlacklistContext(context.Background()); err != nil {
+				m.reportError(fmt.Errorf("clean revocation store: %w", err))
+			}
+			m.cleanCache()
+			if cleaner, ok := m.refreshStore.(RefreshTokenUseStoreCleaner); ok {
+				if _, err := cleaner.CleanExpired(context.Background(), time.Now()); err != nil {
+					m.reportError(fmt.Errorf("clean refresh jti store: %w", err))
+				}
+			}
 		case <-m.stopCleanup:
 			m.cleanupTicker.Stop()
 			return
@@ -448,55 +436,138 @@ func (m *TokenManager) startCleanupRoutine() {
 	}
 }
 
-// Shutdown 关闭管理器，停止所有后台任务
+// Shutdown 关闭管理器，停止所有后台任务。可重复、可并发调用。
 func (m *TokenManager) Shutdown() {
-	if m.cleanupTicker != nil {
-		close(m.stopCleanup)
-	}
+	m.shutdownOnce.Do(func() {
+		if m.cleanupTicker != nil {
+			close(m.stopCleanup)
+		}
+	})
 }
 
 // EnableLog 启用日志记录
 func (m *TokenManager) EnableLog(enable bool) {
+	m.configMu.Lock()
 	m.enableLog = enable
+	m.configMu.Unlock()
 }
 
 // EnableCache 启用缓存
 func (m *TokenManager) EnableCache(enable bool) {
+	m.configMu.Lock()
 	m.enableCache = enable
+	m.configMu.Unlock()
 }
 
 // SetCacheTTL 设置缓存过期时间
-func (m *TokenManager) SetCacheTTL(ttl time.Duration) {
+func (m *TokenManager) SetCacheTTL(ttl time.Duration) error {
+	if ttl <= 0 {
+		return ErrInvalidCacheTTL
+	}
+	m.configMu.Lock()
 	m.cacheTTL = ttl
+	m.configMu.Unlock()
+	return nil
 }
 
 // SetCacheSize 设置缓存大小
-func (m *TokenManager) SetCacheSize(size int) {
+func (m *TokenManager) SetCacheSize(size int) error {
+	if size <= 0 {
+		return ErrInvalidCacheSize
+	}
+	m.configMu.Lock()
 	m.cacheSize = size
+	m.configMu.Unlock()
+	return nil
 }
 
 // SetTokenExpiry 设置令牌过期时间
-func (m *TokenManager) SetTokenExpiry(tokenType TokenType, expiry time.Duration) {
-	if tokenType == AccessToken {
-		m.accessTokenExpiry = expiry
-	} else if tokenType == RefreshToken {
-		m.refreshTokenExpiry = expiry
+func (m *TokenManager) SetTokenExpiry(tokenType TokenType, expiry time.Duration) error {
+	if expiry <= 0 {
+		return ErrInvalidTokenExpiry
 	}
+	m.configMu.Lock()
+	defer m.configMu.Unlock()
+	switch tokenType {
+	case AccessToken:
+		m.accessTokenExpiry = expiry
+	case RefreshToken:
+		m.refreshTokenExpiry = expiry
+	default:
+		return ErrUnknownTokenType
+	}
+	return nil
 }
 
 // SetIssuer 设置默认 JWT 签发者。
 func (m *TokenManager) SetIssuer(issuer string) {
+	m.configMu.Lock()
 	m.issuer = issuer
+	m.configMu.Unlock()
 }
 
 // SetAudience 设置默认 JWT 受众。
 func (m *TokenManager) SetAudience(audience ...string) {
+	m.configMu.Lock()
 	m.audience = cloneStringSlice(audience)
+	m.configMu.Unlock()
+}
+
+type managerSnapshot struct {
+	enableCache             bool
+	enableLog               bool
+	cacheSize               int
+	cacheTTL                time.Duration
+	accessTokenExpiry       time.Duration
+	refreshTokenExpiry      time.Duration
+	issuer                  string
+	audience                []string
+	expectedIssuer          string
+	expectedAudience        []string
+	refreshTokenReuseAction RefreshTokenReuseAction
+	errorReporter           func(error)
+}
+
+func (m *TokenManager) snapshotConfig() managerSnapshot {
+	m.configMu.RLock()
+	defer m.configMu.RUnlock()
+	return managerSnapshot{
+		enableCache:             m.enableCache,
+		enableLog:               m.enableLog,
+		cacheSize:               m.cacheSize,
+		cacheTTL:                m.cacheTTL,
+		accessTokenExpiry:       m.accessTokenExpiry,
+		refreshTokenExpiry:      m.refreshTokenExpiry,
+		issuer:                  m.issuer,
+		audience:                cloneStringSlice(m.audience),
+		expectedIssuer:          m.expectedIssuer,
+		expectedAudience:        cloneStringSlice(m.expectedAudience),
+		refreshTokenReuseAction: m.refreshTokenReuseAction,
+		errorReporter:           m.errorReporter,
+	}
+}
+
+func (m *TokenManager) reportError(err error) {
+	if err == nil {
+		return
+	}
+	reporter := m.snapshotConfig().errorReporter
+	if reporter == nil {
+		reporter = defaultErrorReporter
+	}
+	reporter(err)
+}
+
+func defaultErrorReporter(err error) {
+	if err == nil {
+		return
+	}
+	log.Printf("jwt manager error: %s", err.Error())
 }
 
 // logf 内部日志记录函数
 func (m *TokenManager) logf(format string, args ...interface{}) {
-	if m.enableLog {
+	if m.snapshotConfig().enableLog {
 		log.Printf(format, args...)
 	}
 }
@@ -520,13 +591,14 @@ func (m *TokenManager) GenerateToken(subject string, options ...*TokenOptions) (
 		tokenType = AccessToken
 	}
 
+	snap := m.snapshotConfig()
 	var expiresIn time.Duration
 	if opts.ExpiresIn > 0 {
 		expiresIn = opts.ExpiresIn
 	} else if tokenType == AccessToken {
-		expiresIn = m.accessTokenExpiry
+		expiresIn = snap.accessTokenExpiry
 	} else {
-		expiresIn = m.refreshTokenExpiry
+		expiresIn = snap.refreshTokenExpiry
 	}
 
 	// 生成唯一令牌ID，如果没有提供。
@@ -544,11 +616,11 @@ func (m *TokenManager) GenerateToken(subject string, options ...*TokenOptions) (
 	now := time.Now()
 	issuer := opts.Issuer
 	if issuer == "" {
-		issuer = m.issuer
+		issuer = snap.issuer
 	}
 	audience := cloneStringSlice(opts.Audience)
 	if len(audience) == 0 {
-		audience = cloneStringSlice(m.audience)
+		audience = cloneStringSlice(snap.audience)
 	}
 	claims := &StandardClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -576,10 +648,7 @@ func (m *TokenManager) GenerateToken(subject string, options ...*TokenOptions) (
 		return "", err
 	}
 
-	if m.enableLog {
-		m.logf("已生成%s令牌，主题: %s, 过期时间: %v",
-			tokenType, subject, expiresIn)
-	}
+	m.logf("已生成%s令牌，主题: %s, 过期时间: %v", tokenType, subject, expiresIn)
 
 	return tokenStr, nil
 }
@@ -605,8 +674,10 @@ func (m *TokenManager) ValidateTokenContext(ctx context.Context, tokenStr string
 		return nil, ErrTokenRevoked
 	}
 
+	snap := m.snapshotConfig()
+
 	// 解析缓存只负责性能；命中后仍需检查会话吊销状态。
-	if m.enableCache {
+	if snap.enableCache {
 		if claims, cachedErr, found := m.checkCache(tokenStr); found {
 			if cachedErr != nil || claims == nil {
 				return claims, cachedErr
@@ -626,16 +697,20 @@ func (m *TokenManager) ValidateTokenContext(ctx context.Context, tokenStr string
 	// 进行预检查，避免解析无效token
 	if !m.isTokenFormatValid(tokenStr) {
 		err := errors.New("invalid token format")
-		if m.enableCache {
-			m.cacheResult(tokenStr, nil, err)
+		if snap.enableCache {
+			if cacheErr := m.cacheResult(tokenStr, nil, err); cacheErr != nil {
+				return nil, cacheErr
+			}
 		}
 		return nil, err
 	}
 
 	claims, err := m.parseTokenClaims(tokenStr, true)
 	if err != nil {
-		if m.enableCache {
-			m.cacheResult(tokenStr, nil, err)
+		if snap.enableCache {
+			if cacheErr := m.cacheResult(tokenStr, nil, err); cacheErr != nil {
+				return nil, cacheErr
+			}
 		}
 		return nil, err
 	}
@@ -648,19 +723,32 @@ func (m *TokenManager) ValidateTokenContext(ctx context.Context, tokenStr string
 		return nil, ErrSessionRevoked
 	}
 
-	if m.enableCache {
-		m.cacheResult(tokenStr, claims, nil)
+	if snap.enableCache {
+		if cacheErr := m.cacheResult(tokenStr, claims, nil); cacheErr != nil {
+			return nil, cacheErr
+		}
 	}
 	return claims, nil
 }
 
 func (m *TokenManager) parseTokenClaims(tokenStr string, validateClaims bool) (*StandardClaims, error) {
-	parserOptions := make([]jwt.ParserOption, 0, 1)
-	if !validateClaims {
+	snap := m.snapshotConfig()
+	parserOptions := []jwt.ParserOption{
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+	}
+	if validateClaims {
+		parserOptions = append(parserOptions, jwt.WithExpirationRequired())
+		if snap.expectedIssuer != "" {
+			parserOptions = append(parserOptions, jwt.WithIssuer(snap.expectedIssuer))
+		}
+		if len(snap.expectedAudience) > 0 {
+			parserOptions = append(parserOptions, jwt.WithAudience(snap.expectedAudience...))
+		}
+	} else {
 		parserOptions = append(parserOptions, jwt.WithoutClaimsValidation())
 	}
 	token, err := parseWithClaims(tokenStr, &StandardClaims{}, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+		if token.Method == nil || token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 			return nil, fmt.Errorf("意外的签名方法: %v", token.Header["alg"])
 		}
 		return m.secretKey, nil
@@ -689,11 +777,17 @@ func (m *TokenManager) RefreshTokenContext(ctx context.Context, refreshTokenStr 
 	if err != nil {
 		if errors.Is(err, ErrTokenRevoked) {
 			replayClaims, parseErr := m.parseTokenClaims(refreshTokenStr, false)
-			if parseErr == nil && replayClaims.TokenType == RefreshToken && m.refreshJTIUsed(replayClaims.TokenID) {
-				if revokeErr := m.revokeSession(ctx, replayClaims.SessionID, m.sessionRevocationExpiry(replayClaims)); revokeErr != nil {
-					return "", "", fmt.Errorf("revoke replayed refresh token session: %w", revokeErr)
+			if parseErr == nil && replayClaims.TokenType == RefreshToken {
+				consumed, storeErr := m.refreshStore.IsConsumed(ctx, replayClaims.TokenID)
+				if storeErr != nil {
+					return "", "", fmt.Errorf("check refresh jti consumption: %w", storeErr)
 				}
-				return "", "", errors.New("refresh token reuse detected")
+				if consumed {
+					if revokeErr := m.revokeSession(ctx, replayClaims.SessionID, m.sessionRevocationExpiry(replayClaims)); revokeErr != nil {
+						return "", "", fmt.Errorf("revoke replayed refresh token session: %w", revokeErr)
+					}
+					return "", "", ErrRefreshReuseDetected
+				}
 			}
 		}
 		return "", "", fmt.Errorf("刷新令牌验证失败: %w", err)
@@ -709,20 +803,24 @@ func (m *TokenManager) RefreshTokenContext(ctx context.Context, refreshTokenStr 
 		return "", "", errors.New("refresh token missing jti")
 	}
 
-	expireAt := time.Now().Add(m.refreshTokenExpiry)
+	snap := m.snapshotConfig()
+	expireAt := time.Now().Add(snap.refreshTokenExpiry)
 	if claims.ExpiresAt != nil {
 		expireAt = claims.ExpiresAt.Time
 	}
 
-	// 原子消费 jti：如果第二次使用，则判定为复用/重放
-	if first := m.consumeRefreshJTI(claims.TokenID, expireAt); !first {
-		switch m.refreshTokenReuseAction {
+	first, err := m.refreshStore.Consume(ctx, claims.TokenID, expireAt)
+	if err != nil {
+		return "", "", fmt.Errorf("consume refresh jti: %w", err)
+	}
+	if !first {
+		switch snap.refreshTokenReuseAction {
 		case RevokeSessionOnRefreshReuse:
 			if err := m.revokeSession(ctx, claims.SessionID, m.sessionRevocationExpiry(claims)); err != nil {
 				return "", "", fmt.Errorf("revoke replayed refresh token session: %w", err)
 			}
 		}
-		return "", "", errors.New("refresh token reuse detected")
+		return "", "", ErrRefreshReuseDetected
 	}
 
 	// rotation：生成新的 refresh token（同 sid）
@@ -758,7 +856,7 @@ func (m *TokenManager) RefreshTokenContext(ctx context.Context, refreshTokenStr 
 }
 
 func (m *TokenManager) sessionRevocationExpiry(claims *StandardClaims) time.Time {
-	expiresAt := time.Now().Add(m.refreshTokenExpiry)
+	expiresAt := time.Now().Add(m.snapshotConfig().refreshTokenExpiry)
 	if claims != nil && claims.ExpiresAt != nil && claims.ExpiresAt.Time.After(expiresAt) {
 		return claims.ExpiresAt.Time
 	}
@@ -792,42 +890,64 @@ func (m *TokenManager) checkCache(tokenStr string) (*StandardClaims, error, bool
 		return nil, nil, false
 	}
 
-	// 检查缓存项是否过期
-	if time.Since(item.timestamp) > m.cacheTTL {
-		// 缓存已过期，移除它
+	if !time.Now().Before(item.validUntil) {
 		m.cacheLock.Lock()
 		delete(m.cache, tokenStr)
 		m.cacheLock.Unlock()
 		return nil, nil, false
 	}
 
-	// 返回缓存的结果
-	if m.enableLog {
+	if m.snapshotConfig().enableLog {
 		m.logf("使用缓存结果验证令牌: token_hash=%s", tokenLogID(tokenStr))
 	}
-	return item.claims, item.err, true
+	if item.err != nil {
+		return nil, item.err, true
+	}
+	cloned, err := cloneStandardClaims(item.claims)
+	if err != nil {
+		return nil, err, true
+	}
+	return cloned, nil, true
 }
 
 // 缓存验证结果
-func (m *TokenManager) cacheResult(tokenStr string, claims *StandardClaims, err error) {
+func (m *TokenManager) cacheResult(tokenStr string, claims *StandardClaims, err error) error {
+	snap := m.snapshotConfig()
+	now := time.Now()
+	item := cacheItem{
+		err:       err,
+		timestamp: now,
+	}
+
+	if err != nil {
+		item.validUntil = now.Add(snap.cacheTTL)
+	} else {
+		if claims == nil || claims.ExpiresAt == nil || !claims.ExpiresAt.Time.After(now) {
+			return nil
+		}
+		cloned, cloneErr := cloneStandardClaims(claims)
+		if cloneErr != nil {
+			return cloneErr
+		}
+		validUntil := now.Add(snap.cacheTTL)
+		if claims.ExpiresAt.Time.Before(validUntil) {
+			validUntil = claims.ExpiresAt.Time
+		}
+		item.claims = cloned
+		item.validUntil = validUntil
+	}
+
 	m.cacheLock.Lock()
 	defer m.cacheLock.Unlock()
-
-	// 如果缓存已满，先清理部分旧数据
-	if len(m.cache) >= m.cacheSize {
-		m.evictOldestCache(m.cacheSize / 5) // 清理20%的缓存
+	if snap.cacheSize > 0 && len(m.cache) >= snap.cacheSize {
+		m.evictOldestCache(snap.cacheSize / 5)
 	}
-
-	// 添加到缓存
-	m.cache[tokenStr] = cacheItem{
-		claims:    claims,
-		err:       err,
-		timestamp: time.Now(),
-	}
+	m.cache[tokenStr] = item
+	return nil
 }
 
 func (m *TokenManager) deleteCacheResult(tokenStr string) {
-	if !m.enableCache {
+	if !m.snapshotConfig().enableCache {
 		return
 	}
 	m.cacheLock.Lock()
@@ -869,18 +989,15 @@ func (m *TokenManager) cleanCache() {
 	defer m.cacheLock.Unlock()
 
 	now := time.Now()
-	expiredTime := now.Add(-m.cacheTTL)
 
 	// 删除所有过期的缓存项
 	for token, item := range m.cache {
-		if item.timestamp.Before(expiredTime) {
+		if !now.Before(item.validUntil) {
 			delete(m.cache, token)
 		}
 	}
 
-	if m.enableLog {
-		m.logf("已清理过期缓存，当前缓存大小: %d", len(m.cache))
-	}
+	m.logf("已清理过期缓存，当前缓存大小: %d", len(m.cache))
 }
 
 // RevokeToken 撤销一个具体令牌。
@@ -924,9 +1041,7 @@ func (m *TokenManager) RevokeTokenContext(ctx context.Context, tokenStr string) 
 		return nil
 	}
 
-	if m.enableLog {
-		m.logf("撤销令牌: token_hash=%s, 过期时间: %v", tokenLogID(tokenStr), expireTime)
-	}
+	m.logf("撤销令牌: token_hash=%s, 过期时间: %v", tokenLogID(tokenStr), expireTime)
 	if err := m.revocations.Revoke(ctx, tokenRevocationKey(tokenStr), expireTime); err != nil {
 		return fmt.Errorf("store token revocation: %w", err)
 	}
@@ -934,11 +1049,13 @@ func (m *TokenManager) RevokeTokenContext(ctx context.Context, tokenStr string) 
 	return nil
 }
 
-// IsBlacklisted 检查令牌是否在黑名单中
+// IsBlacklisted 检查令牌是否在黑名单中。
+//
+// Deprecated: 使用 IsTokenRevokedContext。存储错误会被 reporter 接收并返回 true。
 func (m *TokenManager) IsBlacklisted(tokenStr string) bool {
 	revoked, err := m.IsTokenRevokedContext(context.Background(), tokenStr)
 	if err != nil {
-		m.logf("检查令牌吊销状态失败: %v", err)
+		m.reportError(fmt.Errorf("check token revocation: %w", err))
 		return true
 	}
 	return revoked
@@ -993,31 +1110,45 @@ func (m *TokenManager) RevokeSessionContext(ctx context.Context, tokenStr string
 	return nil
 }
 
-// CleanBlacklist 清理支持主动清理能力的吊销存储。
-func (m *TokenManager) CleanBlacklist() {
+// CleanBlacklistContext 清理支持主动清理能力的吊销存储。
+func (m *TokenManager) CleanBlacklistContext(ctx context.Context) (int, error) {
 	cleaner, ok := m.revocations.(RevocationStoreCleaner)
 	if !ok {
-		return
+		return 0, nil
 	}
-	cleaned, err := cleaner.CleanExpired(context.Background(), time.Now())
+	return cleaner.CleanExpired(nonNilContext(ctx), time.Now())
+}
+
+// CleanBlacklist 清理支持主动清理能力的吊销存储。
+//
+// Deprecated: 使用 CleanBlacklistContext。
+func (m *TokenManager) CleanBlacklist() {
+	cleaned, err := m.CleanBlacklistContext(context.Background())
 	if err != nil {
-		m.logf("清理吊销记录失败: %v", err)
+		m.reportError(fmt.Errorf("clean revocation store: %w", err))
 		return
 	}
-	if m.enableLog && cleaned > 0 {
+	if m.snapshotConfig().enableLog && cleaned > 0 {
 		m.logf("已清理 %d 条过期的黑名单记录", cleaned)
 	}
 }
 
-// GetBlacklistSize 返回支持统计能力的吊销存储记录数。
-func (m *TokenManager) GetBlacklistSize() int {
+// GetBlacklistSizeContext 返回支持统计能力的吊销存储记录数。
+func (m *TokenManager) GetBlacklistSizeContext(ctx context.Context) (int, error) {
 	sizer, ok := m.revocations.(RevocationStoreSizer)
 	if !ok {
-		return 0
+		return 0, ErrBlacklistSizeUnsupported
 	}
-	size, err := sizer.Size(context.Background())
+	return sizer.Size(nonNilContext(ctx))
+}
+
+// GetBlacklistSize 返回支持统计能力的吊销存储记录数。
+//
+// Deprecated: 使用 GetBlacklistSizeContext。
+func (m *TokenManager) GetBlacklistSize() int {
+	size, err := m.GetBlacklistSizeContext(context.Background())
 	if err != nil {
-		m.logf("统计吊销记录失败: %v", err)
+		m.reportError(fmt.Errorf("stat revocation store: %w", err))
 		return 0
 	}
 	return size
@@ -1032,28 +1163,33 @@ func (m *TokenManager) GetCacheSize() int {
 
 // GetTokenExpiryConfig 返回当前配置的JWT选项
 func (m *TokenManager) GetTokenExpiryConfig() *JWTOptions {
+	snap := m.snapshotConfig()
 	return &JWTOptions{
-		EnableLog:               m.enableLog,
+		EnableLog:               snap.enableLog,
 		BlacklistCleanInterval:  m.blacklistCleanInterval,
-		EnableCache:             m.enableCache,
-		CacheSize:               m.cacheSize,
-		CacheTTL:                m.cacheTTL,
-		AccessTokenExpiry:       m.accessTokenExpiry,
-		RefreshTokenExpiry:      m.refreshTokenExpiry,
-		Issuer:                  m.issuer,
-		Audience:                cloneStringSlice(m.audience),
+		EnableCache:             snap.enableCache,
+		CacheSize:               snap.cacheSize,
+		CacheTTL:                snap.cacheTTL,
+		AccessTokenExpiry:       snap.accessTokenExpiry,
+		RefreshTokenExpiry:      snap.refreshTokenExpiry,
+		Issuer:                  snap.issuer,
+		Audience:                cloneStringSlice(snap.audience),
+		ExpectedIssuer:          snap.expectedIssuer,
+		ExpectedAudience:        cloneStringSlice(snap.expectedAudience),
 		TokenProfile:            m.tokenProfile.clone(),
-		RefreshTokenReuseAction: m.refreshTokenReuseAction,
+		RefreshTokenReuseAction: snap.refreshTokenReuseAction,
 		RevocationStore:         m.revocations,
+		RefreshTokenUseStore:    m.refreshStore,
+		ErrorReporter:           snap.errorReporter,
 	}
 }
 
 // GetAccessTokenExpiry 返回访问令牌过期时间
 func (m *TokenManager) GetAccessTokenExpiry() time.Duration {
-	return m.accessTokenExpiry
+	return m.snapshotConfig().accessTokenExpiry
 }
 
 // GetRefreshTokenExpiry 返回刷新令牌过期时间
 func (m *TokenManager) GetRefreshTokenExpiry() time.Duration {
-	return m.refreshTokenExpiry
+	return m.snapshotConfig().refreshTokenExpiry
 }

@@ -2,67 +2,45 @@ package errors
 
 import (
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"reflect"
 	"strings"
 )
 
-// Is checks if the error matches the given error type or code
-func Is(err error, target interface{}) bool {
-	if err == nil {
-		return false
-	}
-
-	// Check if it's our custom Error type
-	if customErr, ok := err.(*Error); ok {
-		switch t := target.(type) {
-		case string:
-			// Check against error code
-			return customErr.Code == t
-		case ErrorType:
-			// Check against error type
-			return customErr.Code == t.Code
-		case *Error:
-			// Check against another Error instance
-			return customErr.Code == t.Code
-		}
-	}
-
-	// Fall back to standard errors.Is behavior
-	return err == target
+// Is 委托标准库 errors.Is。
+func Is(err, target error) bool {
+	return stderrors.Is(err, target)
 }
 
-// As attempts to find the first error in err's chain that matches target
-func As(err error, target interface{}) bool {
-	if err == nil {
+// As 委托标准库 errors.As。
+func As(err error, target any) bool {
+	return stderrors.As(err, target)
+}
+
+// IsCode 查找链中第一个 *Error 并比较 Code。
+func IsCode(err error, code string) bool {
+	if code == "" {
 		return false
 	}
+	legacy, ok := asLegacyError(err)
+	return ok && legacy.Code == code
+}
 
-	// Check if target is a pointer to our Error type
-	if targetPtr, ok := target.(**Error); ok {
-		if customErr, ok := err.(*Error); ok {
-			*targetPtr = customErr
-			return true
-		}
-		// Check wrapped errors
-		for err != nil {
-			if customErr, ok := err.(*Error); ok {
-				if customErr.Original != nil {
-					if innerCustomErr, ok := customErr.Original.(*Error); ok {
-						*targetPtr = innerCustomErr
-						return true
-					}
-					err = customErr.Original
-				} else {
-					break
-				}
-			} else {
-				break
-			}
-		}
+func asLegacyError(err error) (*Error, bool) {
+	var legacy *Error
+	if err == nil || !stderrors.As(err, &legacy) {
+		return nil, false
 	}
+	return legacy, true
+}
 
-	return false
+func asRichError(err error) (*RichError, bool) {
+	var rich *RichError
+	if err == nil || !stderrors.As(err, &rich) {
+		return nil, false
+	}
+	return rich, true
 }
 
 // GetCode extracts the error code from any error
@@ -70,11 +48,9 @@ func GetCode(err error) string {
 	if err == nil {
 		return ""
 	}
-
-	if customErr, ok := err.(*Error); ok {
+	if customErr, ok := asLegacyError(err); ok {
 		return customErr.Code
 	}
-
 	return "UNKNOWN_ERROR"
 }
 
@@ -83,15 +59,13 @@ func GetSeverity(err error) Severity {
 	if err == nil {
 		return SeverityLow
 	}
-
-	if customErr, ok := err.(*Error); ok {
+	if customErr, ok := asLegacyError(err); ok {
 		if severity, exists := customErr.Context["severity"]; exists {
 			if sev, ok := severity.(Severity); ok {
 				return sev
 			}
 		}
 	}
-
 	return SeverityLow
 }
 
@@ -100,15 +74,13 @@ func GetCategory(err error) Category {
 	if err == nil {
 		return CategorySystem
 	}
-
-	if customErr, ok := err.(*Error); ok {
+	if customErr, ok := asLegacyError(err); ok {
 		if category, exists := customErr.Context["category"]; exists {
 			if cat, ok := category.(Category); ok {
 				return cat
 			}
 		}
 	}
-
 	return CategorySystem
 }
 
@@ -117,12 +89,10 @@ func GetContext(err error, key string) (interface{}, bool) {
 	if err == nil {
 		return nil, false
 	}
-
-	if customErr, ok := err.(*Error); ok {
+	if customErr, ok := asLegacyError(err); ok {
 		value, exists := customErr.Context[key]
 		return value, exists
 	}
-
 	return nil, false
 }
 
@@ -131,48 +101,41 @@ func GetAllContext(err error) map[string]interface{} {
 	if err == nil {
 		return nil
 	}
-
-	if customErr, ok := err.(*Error); ok {
+	if customErr, ok := asLegacyError(err); ok {
 		return customErr.Context
 	}
-
 	return nil
 }
 
-// Chain returns all errors in the error chain
+// Chain 沿单一 Unwrap 链收集错误。joined error 不猜测分支。
 func Chain(err error) []error {
 	if err == nil {
 		return nil
 	}
-
 	var chain []error
 	for err != nil {
 		chain = append(chain, err)
-		if customErr, ok := err.(*Error); ok {
-			err = customErr.Original
-		} else {
+		unwrapped := stderrors.Unwrap(err)
+		if unwrapped == nil {
 			break
 		}
+		err = unwrapped
 	}
-
 	return chain
 }
 
-// Root returns the root cause error
+// Root 返回单链最后一个 error。遇到无单一 Unwrap 的 joined error 时保留该对象。
 func Root(err error) error {
 	if err == nil {
 		return nil
 	}
-
 	for {
-		if customErr, ok := err.(*Error); ok && customErr.Original != nil {
-			err = customErr.Original
-		} else {
-			break
+		unwrapped := stderrors.Unwrap(err)
+		if unwrapped == nil {
+			return err
 		}
+		err = unwrapped
 	}
-
-	return err
 }
 
 // Format formats an error for different output purposes
@@ -340,26 +303,46 @@ func Clone(err error) *Error {
 	return cloned
 }
 
-// deepCopyValue performs a deep copy of a value
 func deepCopyValue(v interface{}) interface{} {
 	if v == nil {
 		return nil
 	}
-
 	val := reflect.ValueOf(v)
 	switch val.Kind() {
 	case reflect.Map:
-		newMap := make(map[string]interface{})
+		dst := reflect.MakeMapWithSize(val.Type(), val.Len())
 		for _, key := range val.MapKeys() {
-			newMap[key.String()] = deepCopyValue(val.MapIndex(key).Interface())
+			dst.SetMapIndex(key, reflect.ValueOf(deepCopyValue(val.MapIndex(key).Interface())))
 		}
-		return newMap
+		return dst.Interface()
 	case reflect.Slice:
-		newSlice := make([]interface{}, val.Len())
-		for i := 0; i < val.Len(); i++ {
-			newSlice[i] = deepCopyValue(val.Index(i).Interface())
+		if val.IsNil() {
+			return reflect.Zero(val.Type()).Interface()
 		}
-		return newSlice
+		dst := reflect.MakeSlice(val.Type(), val.Len(), val.Len())
+		for i := 0; i < val.Len(); i++ {
+			dst.Index(i).Set(reflect.ValueOf(deepCopyValue(val.Index(i).Interface())))
+		}
+		return dst.Interface()
+	case reflect.Array:
+		dst := reflect.New(val.Type()).Elem()
+		for i := 0; i < val.Len(); i++ {
+			dst.Index(i).Set(reflect.ValueOf(deepCopyValue(val.Index(i).Interface())))
+		}
+		return dst.Interface()
+	case reflect.Ptr:
+		if val.IsNil() {
+			return reflect.Zero(val.Type()).Interface()
+		}
+		elem := deepCopyValue(val.Elem().Interface())
+		ptr := reflect.New(val.Type().Elem())
+		ptr.Elem().Set(reflect.ValueOf(elem))
+		return ptr.Interface()
+	case reflect.Interface:
+		if val.IsNil() {
+			return reflect.Zero(val.Type()).Interface()
+		}
+		return deepCopyValue(val.Elem().Interface())
 	default:
 		return v
 	}

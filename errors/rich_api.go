@@ -116,8 +116,7 @@ func FromRichError(err error) *RichError {
 		return nil
 	}
 
-	// 已经是 *RichError，直接返回
-	if e, ok := err.(*RichError); ok {
+	if e, ok := asRichError(err); ok {
 		return e
 	}
 
@@ -191,7 +190,7 @@ func RichErrorCode(err error, defaultCode int) int {
 	if err == nil {
 		return 0
 	}
-	if e, ok := err.(*RichError); ok {
+	if e, ok := asRichError(err); ok {
 		return e.Code
 	}
 	return defaultCode
@@ -202,7 +201,7 @@ func IsRichErrorCode(err error, code int) bool {
 	if err == nil {
 		return false
 	}
-	if e, ok := err.(*RichError); ok {
+	if e, ok := asRichError(err); ok {
 		return e.Code == code
 	}
 	return false
@@ -210,7 +209,7 @@ func IsRichErrorCode(err error, code int) bool {
 
 // IsClientError 判断是否是客户端错误 (4xx)
 func IsClientError(err error) bool {
-	if e, ok := err.(*RichError); ok {
+	if e, ok := asRichError(err); ok {
 		return e.Code >= 400000 && e.Code < 500000
 	}
 	return false
@@ -218,7 +217,7 @@ func IsClientError(err error) bool {
 
 // IsServerError 判断是否是服务端错误 (5xx)
 func IsServerError(err error) bool {
-	if e, ok := err.(*RichError); ok {
+	if e, ok := asRichError(err); ok {
 		return e.Code >= 500000
 	}
 	return false

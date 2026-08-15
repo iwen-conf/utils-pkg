@@ -2,6 +2,7 @@ package url
 
 import (
 	"encoding/json"
+	"errors"
 	"net/url"
 	"reflect"
 	"strings"
@@ -9,9 +10,11 @@ import (
 	"time"
 )
 
+const testURLSecret = "0123456789abcdef0123456789abcdef"
+
 func TestNewURLBuilder(t *testing.T) {
 	baseURL := "https://example.com"
-	secretKey := "test-secret"
+	secretKey := testURLSecret
 	builder := NewURLBuilder(baseURL, secretKey)
 
 	if builder.baseURL != baseURL {
@@ -26,7 +29,7 @@ func TestNewURLBuilder(t *testing.T) {
 }
 
 func TestURLBuilder_AddParam(t *testing.T) {
-	builder := NewURLBuilder("https://example.com", "secret")
+	builder := NewURLBuilder("https://example.com", testURLSecret)
 	builder.AddParam("key1", "value1")
 	builder.AddParam("key1", "value2")
 
@@ -39,7 +42,7 @@ func TestURLBuilder_AddParam(t *testing.T) {
 }
 
 func TestURLBuilder_AddParams(t *testing.T) {
-	builder := NewURLBuilder("https://example.com", "secret")
+	builder := NewURLBuilder("https://example.com", testURLSecret)
 	params := map[string]string{
 		"key1": "value1",
 		"key2": "value2",
@@ -57,7 +60,7 @@ func TestURLBuilder_AddParams(t *testing.T) {
 }
 
 func TestURLBuilder_SetFragment(t *testing.T) {
-	builder := NewURLBuilder("https://example.com", "secret")
+	builder := NewURLBuilder("https://example.com", testURLSecret)
 	fragment := "section1"
 	builder.SetFragment(fragment)
 
@@ -67,7 +70,7 @@ func TestURLBuilder_SetFragment(t *testing.T) {
 }
 
 func TestURLBuilder_Build(t *testing.T) {
-	builder := NewURLBuilder("https://example.com", "secret")
+	builder := NewURLBuilder("https://example.com", testURLSecret)
 	timestamp := time.Now().Unix()
 	builder.SetTimestamp(timestamp)
 	builder.AddParam("key1", "value1")
@@ -97,7 +100,7 @@ func TestURLBuilder_Build(t *testing.T) {
 }
 
 func TestValidateSignature(t *testing.T) {
-	builder := NewURLBuilder("https://example.com", "secret")
+	builder := NewURLBuilder("https://example.com", testURLSecret)
 	timestamp := time.Now().Unix()
 	builder.SetTimestamp(timestamp)
 	builder.AddParam("key1", "value1")
@@ -108,7 +111,7 @@ func TestValidateSignature(t *testing.T) {
 	}
 
 	// 测试有效签名
-	valid, err := ValidateSignature(url, "secret", 3600)
+	valid, err := ValidateSignature(url, testURLSecret, 3600)
 	if err != nil {
 		t.Errorf("Validation failed: %v", err)
 	}
@@ -117,8 +120,8 @@ func TestValidateSignature(t *testing.T) {
 	}
 
 	// 测试无效密钥
-	valid, err = ValidateSignature(url, "wrong-secret", 3600)
-	if err == nil || err != ErrInvalidSignature {
+	valid, err = ValidateSignature(url, "wrong-secret-key-32bytes-xxxxxxxx", 3600)
+	if err == nil || !errors.Is(err, ErrInvalidSignature) {
 		t.Errorf("Expected invalid signature error, got: %v", err)
 	}
 	if valid {
@@ -126,7 +129,7 @@ func TestValidateSignature(t *testing.T) {
 	}
 
 	// 测试过期 URL
-	oldURL, err := NewURLBuilder("https://example.com", "secret").
+	oldURL, err := NewURLBuilder("https://example.com", testURLSecret).
 		SetTimestamp(time.Now().Unix()-7200). // 2小时前
 		AddParam("key1", "value1").
 		Build()
@@ -135,8 +138,8 @@ func TestValidateSignature(t *testing.T) {
 		t.Fatalf("Build expired URL failed: %v", err)
 	}
 
-	valid, err = ValidateSignature(oldURL, "secret", 3600)
-	if err == nil || err != ErrExpiredURL {
+	valid, err = ValidateSignature(oldURL, testURLSecret, 3600)
+	if err == nil || !errors.Is(err, ErrExpiredURL) {
 		t.Errorf("Expected expired URL error, got: %v", err)
 	}
 	if valid {
@@ -230,7 +233,7 @@ func contains(s, substr string) bool {
 }
 
 func BenchmarkURLBuilder_Build(b *testing.B) {
-	builder := NewURLBuilder("https://example.com", "secret")
+	builder := NewURLBuilder("https://example.com", testURLSecret)
 	builder.AddParam("key1", "value1")
 	builder.AddParam("key2", "value2")
 	builder.SetFragment("section1")
@@ -245,7 +248,7 @@ func BenchmarkURLBuilder_Build(b *testing.B) {
 }
 
 func BenchmarkValidateSignature(b *testing.B) {
-	builder := NewURLBuilder("https://example.com", "secret")
+	builder := NewURLBuilder("https://example.com", testURLSecret)
 	builder.AddParam("key1", "value1")
 	url, err := builder.Build()
 	if err != nil {
@@ -254,7 +257,7 @@ func BenchmarkValidateSignature(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := ValidateSignature(url, "secret", 3600)
+		_, err := ValidateSignature(url, testURLSecret, 3600)
 		if err != nil {
 			b.Fatal(err)
 		}
