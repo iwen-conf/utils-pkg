@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- MIT license in root `LICENSE` (SPDX `MIT`; copyright 2025-2026 iwen-conf). T06-06.
+
 ## [0.5.0] - 待发布
 
 Technical candidate. Public release remains blocked until a license is chosen (T06-06).

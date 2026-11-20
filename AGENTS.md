@@ -23,4 +23,4 @@ bash .github/scripts/check-coverage.sh
 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 ```
 
-Do not invent a LICENSE. Do not claim public-release readiness while T06-06 is blocked.
+License: MIT (`LICENSE`). Copyright (c) 2025-2026 iwen-conf.
