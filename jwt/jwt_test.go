@@ -64,8 +64,11 @@ func TestTokenManager_GenerateToken(t *testing.T) {
 		t.Fatalf("Failed to generate refresh token: %v", err)
 	}
 
-	// 验证刷新令牌
-	claims, err := manager.ValidateToken(refreshToken)
+	// 验证刷新令牌不能被通用接口当作访问令牌通过，必须通过 ValidateRefreshToken 验证
+	if _, err := manager.ValidateToken(refreshToken); !errors.Is(err, ErrTokenTypeMismatch) {
+		t.Fatalf("Expected ErrTokenTypeMismatch when passing refresh token to ValidateToken, got %v", err)
+	}
+	claims, err := manager.ValidateRefreshToken(nil, refreshToken)
 	if err != nil {
 		t.Fatalf("Failed to validate refresh token: %v", err)
 	}

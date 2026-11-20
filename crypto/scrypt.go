@@ -210,11 +210,17 @@ func NewScryptHasher(params *ScryptParams) (*ScryptHasher, error) {
 
 // Hash 使用scrypt哈希密码
 func (s *ScryptHasher) Hash(password []byte) (string, error) {
+	if s == nil {
+		return "", ErrUninitializedHasher
+	}
 	copied := s.params
 	return HashWithScrypt(password, &copied)
 }
 
 // Verify 验证scrypt哈希
 func (s *ScryptHasher) Verify(hash, password []byte) (bool, error) {
+	if s == nil {
+		return false, ErrUninitializedHasher
+	}
 	return VerifyScryptHash(hash, password)
 }

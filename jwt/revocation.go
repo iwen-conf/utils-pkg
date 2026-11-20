@@ -14,9 +14,12 @@ var (
 	ErrTokenRevoked = errors.New("token has been revoked")
 	// ErrSessionRevoked 表示令牌所属会话已被提前吊销。
 	ErrSessionRevoked = errors.New("session has been revoked")
-	// ErrSessionIDMissing 表示令牌不包含可吊销的会话 ID。
+	// ErrSessionIDMissing 表示令牌或调用参数不包含可吊销的会话 ID。
 	ErrSessionIDMissing = errors.New("token session id is missing")
 )
+
+const opportunisticSweepThreshold = 1024
+const opportunisticSweepBudget = 16
 
 // RevocationStore 保存令牌和会话的提前吊销状态。
 //
@@ -43,6 +46,7 @@ type RevocationStoreSizer interface {
 type MemoryRevocationStore struct {
 	mu      sync.RWMutex
 	entries map[string]time.Time
+	nowFunc func() time.Time
 }
 
 var (
@@ -53,7 +57,25 @@ var (
 
 // NewMemoryRevocationStore 创建内存吊销存储。
 func NewMemoryRevocationStore() *MemoryRevocationStore {
-	return &MemoryRevocationStore{entries: make(map[string]time.Time)}
+	return NewMemoryRevocationStoreWithClock(nil)
+}
+
+// NewMemoryRevocationStoreWithClock 创建带可控时钟的内存吊销存储。
+func NewMemoryRevocationStoreWithClock(clock func() time.Time) *MemoryRevocationStore {
+	if clock == nil {
+		clock = time.Now
+	}
+	return &MemoryRevocationStore{
+		entries: make(map[string]time.Time),
+		nowFunc: clock,
+	}
+}
+
+func (s *MemoryRevocationStore) now() time.Time {
+	if s != nil && s.nowFunc != nil {
+		return s.nowFunc()
+	}
+	return time.Now()
 }
 
 // Revoke 写入或延长一条吊销记录。
@@ -65,14 +87,27 @@ func (s *MemoryRevocationStore) Revoke(ctx context.Context, key string, expiresA
 		return errors.New("revocation key cannot be empty")
 	}
 
+	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.entries == nil {
 		s.entries = make(map[string]time.Time)
 	}
-	if !expiresAt.After(time.Now()) {
+	if !expiresAt.After(now) {
 		delete(s.entries, key)
 		return nil
+	}
+	if len(s.entries) >= opportunisticSweepThreshold {
+		swept := 0
+		for k, exp := range s.entries {
+			if !exp.After(now) {
+				delete(s.entries, k)
+			}
+			swept++
+			if swept >= opportunisticSweepBudget {
+				break
+			}
+		}
 	}
 	if current, ok := s.entries[key]; !ok || expiresAt.After(current) {
 		s.entries[key] = expiresAt
@@ -89,7 +124,7 @@ func (s *MemoryRevocationStore) IsRevoked(ctx context.Context, key string) (bool
 		return false, nil
 	}
 
-	now := time.Now()
+	now := s.now()
 	s.mu.RLock()
 	expiresAt, ok := s.entries[key]
 	s.mu.RUnlock()
@@ -126,7 +161,7 @@ func (s *MemoryRevocationStore) CleanExpired(ctx context.Context, now time.Time)
 	return cleaned, nil
 }
 
-// Size 返回当前存储的吊销记录数。
+// Size 返回当前存储的未过期吊销记录数。
 func (s *MemoryRevocationStore) Size(ctx context.Context) (int, error) {
 	if err := contextError(ctx); err != nil {
 		return 0, err

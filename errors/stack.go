@@ -19,16 +19,18 @@ var stackPool = sync.Pool{
 	},
 }
 
-// callers 捕获当前调用堆栈
+// callers 捕获当前调用堆栈（默认跳过 runtime.Callers + callers + 公开构造入口 3 层）。
 func callers() *stack {
+	return callersSkip(3)
+}
+
+func callersSkip(skip int) *stack {
 	pcs := stackPool.Get().(*stack)
 	*pcs = (*pcs)[:cap(*pcs)]
 
-	// Skip 3: runtime.Callers, callers, New/Wrap
-	n := runtime.Callers(3, *pcs)
+	n := runtime.Callers(skip, *pcs)
 	*pcs = (*pcs)[:n]
 
-	// 复制一份返回，原始 slice 放回 pool
 	result := make(stack, n)
 	copy(result, *pcs)
 
@@ -38,19 +40,20 @@ func callers() *stack {
 	return &result
 }
 
-// Format 实现 fmt.Formatter 接口
+// Format 实现 fmt.Formatter 接口，使用 runtime.CallersFrames 精确还原内联帧与调用行号。
 func (s *stack) Format(st fmt.State, verb rune) {
-	switch verb {
-	case 'v':
-		switch {
-		case st.Flag('+'):
-			for _, pc := range *s {
-				f := runtime.FuncForPC(pc)
-				if f == nil {
-					continue
-				}
-				file, line := f.FileLine(pc)
-				fmt.Fprintf(st, "\n\t%s:%d", file, line)
+	if s == nil || len(*s) == 0 {
+		return
+	}
+	if verb == 'v' && st.Flag('+') {
+		frames := runtime.CallersFrames(*s)
+		for {
+			frame, more := frames.Next()
+			if frame.File != "" {
+				fmt.Fprintf(st, "\n\t%s:%d", frame.File, frame.Line)
+			}
+			if !more {
+				break
 			}
 		}
 	}

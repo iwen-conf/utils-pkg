@@ -48,29 +48,46 @@ const (
 
 var reservedQueryKeys = []string{reservedSigVersion, reservedTimestamp, reservedExpiration, reservedSignature}
 
-// URLBuilder URL 构建器
+// URLBuilder URL 签名构建器。
 type URLBuilder struct {
-	baseURL    string
-	params     url.Values
-	fragment   string
-	sortParams bool
-	secretKey  string
-	timestamp  int64
-	expiration int64
-	method     string
+	baseURL      string
+	params       url.Values
+	fragment     string
+	sortParams   bool
+	secretKey    string
+	timestamp    int64
+	timestampSet bool
+	expiration   int64
+	method       string
+	nowFunc      func() time.Time
 }
 
-// NewURLBuilder 创建新的 URL 构建器，默认方法为 GET。
+// NewURLBuilder 创建新的 URL 构建器，默认方法为 GET，默认有效期 3600 秒。
+// 未显式调用 SetTimestamp 时，每次 Build 会使用当前实时时间戳。
 func NewURLBuilder(baseURL string, secretKey string) *URLBuilder {
 	return &URLBuilder{
 		baseURL:    baseURL,
 		params:     make(url.Values),
 		sortParams: true,
 		secretKey:  secretKey,
-		timestamp:  time.Now().Unix(),
 		expiration: 3600,
 		method:     "GET",
+		nowFunc:    time.Now,
 	}
+}
+
+func (b *URLBuilder) now() time.Time {
+	if b != nil && b.nowFunc != nil {
+		return b.nowFunc()
+	}
+	return time.Now()
+}
+
+func (b *URLBuilder) effectiveTimestamp() int64 {
+	if b.timestampSet {
+		return b.timestamp
+	}
+	return b.now().Unix()
 }
 
 // SetMethod 设置签名绑定的 HTTP 方法。
@@ -79,8 +96,11 @@ func (b *URLBuilder) SetMethod(method string) *URLBuilder {
 	return b
 }
 
-// Validate 验证构建器的基本参数
+// Validate 验证构建器的基本参数。
 func (b *URLBuilder) Validate() error {
+	if b == nil {
+		return ErrInvalidBaseURL
+	}
 	if _, err := normalizeSecret(b.secretKey); err != nil {
 		return err
 	}
@@ -94,7 +114,7 @@ func (b *URLBuilder) Validate() error {
 	if hasReservedKeys(parsed.Query()) || hasReservedKeys(b.params) {
 		return ErrReservedQueryParamConflict
 	}
-	if b.timestamp <= 0 {
+	if b.effectiveTimestamp() <= 0 {
 		return ErrInvalidTimestamp
 	}
 	if b.expiration <= 0 {
@@ -103,13 +123,13 @@ func (b *URLBuilder) Validate() error {
 	return nil
 }
 
-// AddParam 添加查询参数
+// AddParam 添加查询参数。
 func (b *URLBuilder) AddParam(key string, value string) *URLBuilder {
 	b.params.Add(key, value)
 	return b
 }
 
-// AddParams 批量添加查询参数
+// AddParams 批量添加查询参数。
 func (b *URLBuilder) AddParams(params map[string]string) *URLBuilder {
 	for k, v := range params {
 		b.AddParam(k, v)
@@ -117,25 +137,26 @@ func (b *URLBuilder) AddParams(params map[string]string) *URLBuilder {
 	return b
 }
 
-// SetFragment 设置 URL 片段
+// SetFragment 设置 URL 片段（不参与服务端 HTTP 请求签名）。
 func (b *URLBuilder) SetFragment(fragment string) *URLBuilder {
 	b.fragment = fragment
 	return b
 }
 
-// SetSortParams 设置是否对参数进行排序
+// SetSortParams 设置是否对参数按键排序。
 func (b *URLBuilder) SetSortParams(sort bool) *URLBuilder {
 	b.sortParams = sort
 	return b
 }
 
-// SetTimestamp 设置时间戳
+// SetTimestamp 显式固定签名时间戳（Unix 秒）。
 func (b *URLBuilder) SetTimestamp(timestamp int64) *URLBuilder {
 	b.timestamp = timestamp
+	b.timestampSet = true
 	return b
 }
 
-// SetExpiration 设置URL过期时间（秒）
+// SetExpiration 设置 URL 过期时间（秒）。
 func (b *URLBuilder) SetExpiration(seconds int64) *URLBuilder {
 	b.expiration = seconds
 	return b
@@ -176,9 +197,10 @@ func (b *URLBuilder) Build() (string, error) {
 		}
 	}
 
+	ts := b.effectiveTimestamp()
 	query.Del(reservedSignature)
 	query.Set(reservedSigVersion, signatureVersionV2)
-	query.Set(reservedTimestamp, strconv.FormatInt(b.timestamp, 10))
+	query.Set(reservedTimestamp, strconv.FormatInt(ts, 10))
 	query.Set(reservedExpiration, strconv.FormatInt(b.expiration, 10))
 	baseURL.RawQuery = query.Encode()
 
@@ -220,7 +242,7 @@ func signCanonical(secretKey, canonical string) string {
 	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
 }
 
-// ParseURL 解析 URL 并返回其组成部分
+// ParseURL 解析 URL 并返回其组成部分。
 func ParseURL(rawURL string) (map[string]interface{}, error) {
 	parsedURL, err := url.Parse(rawURL)
 	if err != nil {
@@ -245,7 +267,7 @@ func ParseURL(rawURL string) (map[string]interface{}, error) {
 	return result, nil
 }
 
-// SerializeParams 序列化参数为 URL 查询字符串
+// SerializeParams 序列化参数为 URL 查询字符串。
 func SerializeParams(params map[string]interface{}) string {
 	if len(params) == 0 {
 		return ""
@@ -253,6 +275,9 @@ func SerializeParams(params map[string]interface{}) string {
 
 	values := url.Values{}
 	for k, v := range params {
+		if v == nil {
+			continue
+		}
 		switch val := v.(type) {
 		case string:
 			values.Add(k, val)
@@ -260,8 +285,12 @@ func SerializeParams(params map[string]interface{}) string {
 			for _, item := range val {
 				values.Add(k, item)
 			}
-		case int, int64, float64, bool:
+		case int, int8, int16, int32, int64,
+			uint, uint8, uint16, uint32, uint64,
+			float32, float64, bool:
 			values.Add(k, fmt.Sprint(val))
+		case fmt.Stringer:
+			values.Add(k, val.String())
 		default:
 			if jsonStr, err := json.Marshal(val); err == nil {
 				values.Add(k, string(jsonStr))
@@ -278,6 +307,10 @@ func ValidateSignature(rawURL, secretKey string, maxAgeSeconds int64) (bool, err
 
 // ValidateSignatureWithMethod 按指定 HTTP 方法验证 v2 签名 URL。
 func ValidateSignatureWithMethod(rawURL, method, secretKey string, maxAgeSeconds int64) (bool, error) {
+	return validateSignatureAt(rawURL, method, secretKey, maxAgeSeconds, time.Now().Unix())
+}
+
+func validateSignatureAt(rawURL, method, secretKey string, maxAgeSeconds int64, now int64) (bool, error) {
 	if _, err := normalizeSecret(secretKey); err != nil {
 		return false, err
 	}
@@ -290,7 +323,6 @@ func ValidateSignatureWithMethod(rawURL, method, secretKey string, maxAgeSeconds
 		return false, err
 	}
 
-	now := time.Now().Unix()
 	query := parsedURL.Query()
 
 	sigv, err := reservedValue(query, reservedSigVersion, ErrMissingSignatureVersion)
@@ -353,7 +385,7 @@ func ValidateSignatureWithMethod(rawURL, method, secretKey string, maxAgeSeconds
 	return true, nil
 }
 
-// BatchValidateSignatures 批量验证URL签名
+// BatchValidateSignatures 批量验证 GET URL 签名。
 func BatchValidateSignatures(urls []string, secretKey string, maxAgeSeconds int64) map[string]error {
 	results := make(map[string]error, len(urls))
 	for _, rawURL := range urls {
@@ -363,7 +395,7 @@ func BatchValidateSignatures(urls []string, secretKey string, maxAgeSeconds int6
 	return results
 }
 
-// DeserializeParams 反序列化 URL 查询字符串为参数映射
+// DeserializeParams 反序列化 URL 查询字符串为参数映射。
 func DeserializeParams(queryString string) (map[string]interface{}, error) {
 	result := make(map[string]interface{})
 	if queryString == "" {
@@ -390,6 +422,8 @@ func CreateSignedURL(baseURL, secretKey string, params map[string]string, expire
 	builder.AddParams(params)
 	if expireSeconds > 0 {
 		builder.SetExpiration(expireSeconds)
+	} else if expireSeconds < 0 {
+		return "", ErrInvalidExpiration
 	}
 	return builder.Build()
 }

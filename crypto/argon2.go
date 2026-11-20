@@ -253,11 +253,17 @@ func NewArgon2Hasher(params *Argon2Params) (*Argon2Hasher, error) {
 
 // Hash 使用Argon2哈希密码
 func (a *Argon2Hasher) Hash(password []byte) (string, error) {
+	if a == nil {
+		return "", ErrUninitializedHasher
+	}
 	copied := a.params
 	return HashWithArgon2(password, &copied)
 }
 
 // Verify 验证Argon2哈希
 func (a *Argon2Hasher) Verify(hash, password []byte) (bool, error) {
+	if a == nil {
+		return false, ErrUninitializedHasher
+	}
 	return VerifyArgon2Hash(hash, password)
 }

@@ -56,8 +56,11 @@ type Error struct {
 	Original  error                  `json:"original"`  // 原始错误 - 支持错误链
 }
 
-// Error 实现 error 接口
+// Error 实现 error 接口（nil 接收者安全，避免 typed-nil 赋值给 error 接口时 panic）
 func (e *Error) Error() string {
+	if e == nil {
+		return ""
+	}
 	if e.Details != "" {
 		return fmt.Sprintf("[%s] %s: %s", e.Code, e.Message, e.Details)
 	}
@@ -66,11 +69,17 @@ func (e *Error) Error() string {
 
 // Unwrap 返回原始错误
 func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
 	return e.Original
 }
 
 // WithContext 添加上下文信息
 func (e *Error) WithContext(key string, value interface{}) *Error {
+	if e == nil {
+		return nil
+	}
 	if e.Context == nil {
 		e.Context = make(map[string]interface{})
 	}
@@ -80,24 +89,36 @@ func (e *Error) WithContext(key string, value interface{}) *Error {
 
 // WithMessage 设置错误消息
 func (e *Error) WithMessage(message string) *Error {
+	if e == nil {
+		return nil
+	}
 	e.Message = message
 	return e
 }
 
 // WithDetails 设置错误详情
 func (e *Error) WithDetails(details string) *Error {
+	if e == nil {
+		return nil
+	}
 	e.Details = details
 	return e
 }
 
 // WithCode 设置错误码
 func (e *Error) WithCode(code string) *Error {
+	if e == nil {
+		return nil
+	}
 	e.Code = code
 	return e
 }
 
 // WithOriginal 设置原始错误
 func (e *Error) WithOriginal(err error) *Error {
+	if e == nil {
+		return nil
+	}
 	e.Original = err
 	return e
 }

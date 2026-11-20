@@ -43,10 +43,13 @@ func asRichError(err error) (*RichError, bool) {
 	return rich, true
 }
 
-// GetCode extracts the error code from any error
+// GetCode extracts the error code from any error (supports both *RichError and legacy *Error)
 func GetCode(err error) string {
 	if err == nil {
 		return ""
+	}
+	if rich, ok := asRichError(err); ok {
+		return fmt.Sprintf("%d", rich.Code)
 	}
 	if customErr, ok := asLegacyError(err); ok {
 		return customErr.Code
@@ -144,7 +147,21 @@ func Format(err error, format string) string {
 		return ""
 	}
 
-	customErr, ok := err.(*Error)
+	if richErr, ok := asRichError(err); ok {
+		switch strings.ToLower(format) {
+		case "json":
+			data, _ := richErr.MarshalJSON()
+			return string(data)
+		case "short":
+			return fmt.Sprintf("[%d] %s", richErr.Code, richErr.Msg)
+		case "detailed":
+			return fmt.Sprintf("%+v", richErr)
+		default:
+			return richErr.Error()
+		}
+	}
+
+	customErr, ok := asLegacyError(err)
 	if !ok {
 		return err.Error()
 	}
@@ -185,8 +202,14 @@ func Compare(err1, err2 error) bool {
 		return false
 	}
 
-	customErr1, ok1 := err1.(*Error)
-	customErr2, ok2 := err2.(*Error)
+	if r1, ok1 := asRichError(err1); ok1 {
+		if r2, ok2 := asRichError(err2); ok2 {
+			return r1.Code == r2.Code && r1.Msg == r2.Msg
+		}
+	}
+
+	customErr1, ok1 := asLegacyError(err1)
+	customErr2, ok2 := asLegacyError(err2)
 
 	if !ok1 || !ok2 {
 		return err1.Error() == err2.Error()
@@ -310,9 +333,18 @@ func deepCopyValue(v interface{}) interface{} {
 	val := reflect.ValueOf(v)
 	switch val.Kind() {
 	case reflect.Map:
+		if val.IsNil() {
+			return reflect.Zero(val.Type()).Interface()
+		}
 		dst := reflect.MakeMapWithSize(val.Type(), val.Len())
+		elemType := val.Type().Elem()
 		for _, key := range val.MapKeys() {
-			dst.SetMapIndex(key, reflect.ValueOf(deepCopyValue(val.MapIndex(key).Interface())))
+			copied := deepCopyValue(val.MapIndex(key).Interface())
+			if copied == nil {
+				dst.SetMapIndex(key, reflect.Zero(elemType))
+			} else {
+				dst.SetMapIndex(key, reflect.ValueOf(copied))
+			}
 		}
 		return dst.Interface()
 	case reflect.Slice:
@@ -320,14 +352,26 @@ func deepCopyValue(v interface{}) interface{} {
 			return reflect.Zero(val.Type()).Interface()
 		}
 		dst := reflect.MakeSlice(val.Type(), val.Len(), val.Len())
+		elemType := val.Type().Elem()
 		for i := 0; i < val.Len(); i++ {
-			dst.Index(i).Set(reflect.ValueOf(deepCopyValue(val.Index(i).Interface())))
+			copied := deepCopyValue(val.Index(i).Interface())
+			if copied == nil {
+				dst.Index(i).Set(reflect.Zero(elemType))
+			} else {
+				dst.Index(i).Set(reflect.ValueOf(copied))
+			}
 		}
 		return dst.Interface()
 	case reflect.Array:
 		dst := reflect.New(val.Type()).Elem()
+		elemType := val.Type().Elem()
 		for i := 0; i < val.Len(); i++ {
-			dst.Index(i).Set(reflect.ValueOf(deepCopyValue(val.Index(i).Interface())))
+			copied := deepCopyValue(val.Index(i).Interface())
+			if copied == nil {
+				dst.Index(i).Set(reflect.Zero(elemType))
+			} else {
+				dst.Index(i).Set(reflect.ValueOf(copied))
+			}
 		}
 		return dst.Interface()
 	case reflect.Ptr:
@@ -336,7 +380,9 @@ func deepCopyValue(v interface{}) interface{} {
 		}
 		elem := deepCopyValue(val.Elem().Interface())
 		ptr := reflect.New(val.Type().Elem())
-		ptr.Elem().Set(reflect.ValueOf(elem))
+		if elem != nil {
+			ptr.Elem().Set(reflect.ValueOf(elem))
+		}
 		return ptr.Interface()
 	case reflect.Interface:
 		if val.IsNil() {

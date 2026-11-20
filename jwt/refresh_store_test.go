@@ -130,7 +130,7 @@ func TestRefreshToken_SharedStoreSingleFirstUse(t *testing.T) {
 		t.Fatalf("expected 1 success and 1 reuse, got success=%d reuse=%d", successes, reuses)
 	}
 
-	if _, err := m1.ValidateToken(refresh); !errors.Is(err, ErrTokenRevoked) && !errors.Is(err, ErrSessionRevoked) {
+	if _, err := m1.ValidateRefreshToken(context.Background(), refresh); !errors.Is(err, ErrTokenRevoked) && !errors.Is(err, ErrSessionRevoked) {
 		t.Fatalf("old refresh should be revoked, got %v", err)
 	}
 }

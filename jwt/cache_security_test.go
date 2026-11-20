@@ -2,6 +2,7 @@ package jwt
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -9,36 +10,32 @@ import (
 )
 
 func TestValidateToken_CacheCannotOutliveExp(t *testing.T) {
-	tm := MustNewTokenManager(testSecretKey)
-	defer tm.Shutdown()
-	if err := tm.SetCacheTTL(time.Minute); err != nil {
-		t.Fatalf("SetCacheTTL: %v", err)
-	}
+	now := time.Unix(1_750_000_000, 0)
+	opts := DefaultJWTOptions()
+	opts.BlacklistCleanInterval = 0
+	opts.CacheTTL = time.Minute
+	opts.Clock = func() time.Time { return now }
 
-	token, err := tm.GenerateToken("u-1", &TokenOptions{ExpiresIn: time.Second})
+	tm := MustNewTokenManager(testSecretKey, opts)
+	defer tm.Shutdown()
+
+	token, err := tm.GenerateToken("u-1", &TokenOptions{ExpiresIn: 2 * time.Second})
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
-	claims, err := tm.ValidateToken(token)
-	if err != nil {
+	if _, err := tm.ValidateToken(token); err != nil {
 		t.Fatalf("first ValidateToken: %v", err)
 	}
-	if tm.GetCacheSize() == 0 {
-		t.Fatalf("expected success result to be cached")
+	if tm.GetCacheSize() != 1 {
+		t.Fatalf("expected success result to be cached, got size=%d", tm.GetCacheSize())
 	}
 
-	wait := time.Until(claims.ExpiresAt.Time) + 20*time.Millisecond
-	if wait < 20*time.Millisecond {
-		wait = 20 * time.Millisecond
-	}
-	time.Sleep(wait)
-
+	now = now.Add(3 * time.Second)
 	_, err = tm.ValidateToken(token)
 	if !errors.Is(err, jwt.ErrTokenExpired) {
 		t.Fatalf("expected jwt.ErrTokenExpired after exp, got %v", err)
 	}
-	_, cachedErr, found := tm.checkCache(token)
-	if found && cachedErr == nil {
+	if _, _, found := tm.cache.get(token, now); found {
 		t.Fatalf("success cache must not survive token exp")
 	}
 	if _, err := tm.ValidateToken(token); !errors.Is(err, jwt.ErrTokenExpired) {
@@ -47,11 +44,14 @@ func TestValidateToken_CacheCannotOutliveExp(t *testing.T) {
 }
 
 func TestValidateToken_CacheTTLExpiresBeforeToken(t *testing.T) {
-	tm := MustNewTokenManager(testSecretKey)
+	now := time.Unix(1_750_000_000, 0)
+	opts := DefaultJWTOptions()
+	opts.BlacklistCleanInterval = 0
+	opts.CacheTTL = 5 * time.Second
+	opts.Clock = func() time.Time { return now }
+
+	tm := MustNewTokenManager(testSecretKey, opts)
 	defer tm.Shutdown()
-	if err := tm.SetCacheTTL(40 * time.Millisecond); err != nil {
-		t.Fatalf("SetCacheTTL: %v", err)
-	}
 
 	token, err := tm.GenerateToken("u-1", &TokenOptions{ExpiresIn: time.Minute})
 	if err != nil {
@@ -60,74 +60,144 @@ func TestValidateToken_CacheTTLExpiresBeforeToken(t *testing.T) {
 	if _, err := tm.ValidateToken(token); err != nil {
 		t.Fatalf("first ValidateToken: %v", err)
 	}
-	time.Sleep(60 * time.Millisecond)
+
+	now = now.Add(6 * time.Second)
+	if _, _, found := tm.cache.get(token, now); found {
+		t.Fatalf("expected cache entry to expire after CacheTTL")
+	}
 	if _, err := tm.ValidateToken(token); err != nil {
 		t.Fatalf("token should still be valid after cache TTL: %v", err)
 	}
 }
 
-func TestCacheResult_NegativeCacheUsesTTL(t *testing.T) {
-	tm := MustNewTokenManager(testSecretKey)
+func TestValidateToken_InvalidTokensDoNotPolluteOrEvictValidCache(t *testing.T) {
+	opts := DefaultJWTOptions()
+	opts.BlacklistCleanInterval = 0
+	opts.CacheSize = 4
+	tm := MustNewTokenManager(testSecretKey, opts)
 	defer tm.Shutdown()
-	if err := tm.SetCacheTTL(40 * time.Millisecond); err != nil {
-		t.Fatalf("SetCacheTTL: %v", err)
+
+	validTokens := make([]string, 4)
+	for i := range validTokens {
+		tok, err := tm.GenerateToken(fmt.Sprintf("u-%d", i))
+		if err != nil {
+			t.Fatalf("GenerateToken: %v", err)
+		}
+		if _, err := tm.ValidateToken(tok); err != nil {
+			t.Fatalf("ValidateToken: %v", err)
+		}
+		validTokens[i] = tok
 	}
 
-	cached := errors.New("cached-fail")
-	if err := tm.cacheResult("bad-token", nil, cached); err != nil {
-		t.Fatalf("cacheResult: %v", err)
+	// Flood with 100 invalid tokens -> must NOT evict any of the 4 cached valid tokens!
+	for i := 0; i < 100; i++ {
+		_, _ = tm.ValidateToken(fmt.Sprintf("bad-%d.invalid.signature", i))
 	}
-	_, got, found := tm.checkCache("bad-token")
-	if !found || !errors.Is(got, cached) {
-		t.Fatalf("expected negative cache hit, found=%v err=%v", found, got)
+	if tm.GetCacheSize() != 4 {
+		t.Fatalf("expected 4 valid cached tokens retained, got %d", tm.GetCacheSize())
 	}
-	time.Sleep(60 * time.Millisecond)
-	_, _, found = tm.checkCache("bad-token")
-	if found {
-		t.Fatalf("negative cache should expire with TTL")
+	for _, tok := range validTokens {
+		if _, _, found := tm.cache.get(tok, tm.now()); !found {
+			t.Fatalf("valid token was evicted by invalid token flood")
+		}
 	}
 }
 
-func TestCacheResult_DoesNotStoreNilOrExpiredSuccess(t *testing.T) {
+func TestCachePut_DoesNotStoreNilOrExpiredSuccess(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
+	now := tm.now()
 
-	if err := tm.cacheResult("nil-success", nil, nil); err != nil {
-		t.Fatalf("cacheResult nil claims: %v", err)
+	if err := tm.cache.put("nil-success", nil, now, time.Minute, 10); err != nil {
+		t.Fatalf("cache.put nil claims: %v", err)
 	}
 	if tm.GetCacheSize() != 0 {
 		t.Fatalf("nil success claims must not be cached")
 	}
 
 	expired := &StandardClaims{RegisteredClaims: jwt.RegisteredClaims{
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Second)),
+		ExpiresAt: jwt.NewNumericDate(now.Add(-time.Second)),
 	}}
-	if err := tm.cacheResult("expired-success", expired, nil); err != nil {
-		t.Fatalf("cacheResult expired: %v", err)
+	if err := tm.cache.put("expired-success", expired, now, time.Minute, 10); err != nil {
+		t.Fatalf("cache.put expired: %v", err)
 	}
 	if tm.GetCacheSize() != 0 {
 		t.Fatalf("already expired success must not be cached")
 	}
 }
 
-func TestCacheResult_CloneFailureDoesNotGrowCache(t *testing.T) {
+func TestCachePut_CloneFailureDoesNotGrowCache(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
+	now := tm.now()
 
 	claims := &StandardClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Minute)),
 		},
 		CustomClaims: map[string]interface{}{
 			"bad": make(chan int),
 		},
 	}
 	before := tm.GetCacheSize()
-	err := tm.cacheResult("bad-clone", claims, nil)
+	err := tm.cache.put("bad-clone", claims, now, time.Minute, 10)
 	if !errors.Is(err, ErrUnsupportedClaimType) {
 		t.Fatalf("expected ErrUnsupportedClaimType, got %v", err)
 	}
 	if tm.GetCacheSize() != before {
 		t.Fatalf("clone failure must not grow cache")
+	}
+}
+
+func TestCacheDynamicConfigUpdatesTakeImmediateEffect(t *testing.T) {
+	now := time.Unix(1_750_000_000, 0)
+	opts := DefaultJWTOptions()
+	opts.BlacklistCleanInterval = 0
+	opts.CacheSize = 5
+	opts.CacheTTL = 10 * time.Minute
+	opts.Clock = func() time.Time { return now }
+
+	tm := MustNewTokenManager(testSecretKey, opts)
+	defer tm.Shutdown()
+
+	for i := 0; i < 5; i++ {
+		tok, err := tm.GenerateToken(fmt.Sprintf("u-%d", i), &TokenOptions{ExpiresIn: time.Hour})
+		if err != nil {
+			t.Fatalf("GenerateToken: %v", err)
+		}
+		if _, err := tm.ValidateToken(tok); err != nil {
+			t.Fatalf("ValidateToken: %v", err)
+		}
+	}
+	if tm.GetCacheSize() != 5 {
+		t.Fatalf("expected 5 cached items, got %d", tm.GetCacheSize())
+	}
+
+	// Shrinking CacheSize immediately evicts excess LRU entries.
+	if err := tm.SetCacheSize(2); err != nil {
+		t.Fatalf("SetCacheSize: %v", err)
+	}
+	if tm.GetCacheSize() != 2 {
+		t.Fatalf("expected cache resized to 2 immediately, got %d", tm.GetCacheSize())
+	}
+
+	// Shrinking CacheTTL clamps existing validUntil.
+	if err := tm.SetCacheTTL(5 * time.Second); err != nil {
+		t.Fatalf("SetCacheTTL: %v", err)
+	}
+	now = now.Add(6 * time.Second)
+	if cleaned := tm.cache.cleanExpired(now); cleaned != 2 || tm.GetCacheSize() != 0 {
+		t.Fatalf("expected clamped entries expired, cleaned=%d size=%d", cleaned, tm.GetCacheSize())
+	}
+
+	// EnableCache(false) clears existing cache entries immediately.
+	tok, _ := tm.GenerateToken("u-clear")
+	_, _ = tm.ValidateToken(tok)
+	if tm.GetCacheSize() != 1 {
+		t.Fatalf("expected 1 entry before disable")
+	}
+	tm.EnableCache(false)
+	if tm.GetCacheSize() != 0 {
+		t.Fatalf("expected cache cleared on EnableCache(false), got %d", tm.GetCacheSize())
 	}
 }

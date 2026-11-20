@@ -24,7 +24,7 @@ const (
 type EncryptionMode int
 
 const (
-	// ModeGCM AES-GCM 模式
+	// ModeGCM AES-GCM 认证加密模式
 	ModeGCM EncryptionMode = iota
 	// ModeCFB 已不再支持；构造会失败。
 	ModeCFB
@@ -39,6 +39,8 @@ var (
 	ErrInvalidAESKeySize = errors.New("invalid key size: must be 16, 24, or 32 bytes")
 	// ErrCiphertextTooShort 表示密文短于 nonce。
 	ErrCiphertextTooShort = errors.New("ciphertext is too short")
+	// ErrUninitializedEncryptor 表示对 nil 或未通过构造函数初始化的 AESEncryptor 调用加解密。
+	ErrUninitializedEncryptor = errors.New("AES encryptor is not initialized")
 )
 
 // Encryptor 加密器接口。
@@ -49,12 +51,12 @@ type Encryptor interface {
 	DecryptWithOptions(ciphertext string, encoding EncodingType) ([]byte, error)
 }
 
-// AESEncryptor 只提供 AES-GCM 认证加密。
+// AESEncryptor 提供并发安全的 AES-GCM 认证加密。
 type AESEncryptor struct {
-	block cipher.Block
+	gcm cipher.AEAD
 }
 
-// NewAESEncryptor 创建 AES-GCM 加密器。密钥必须来自 CSPRNG 或 KMS。
+// NewAESEncryptor 创建 AES-GCM 加密器。密钥必须为 16/24/32 字节且来自 CSPRNG 或 KMS。
 func NewAESEncryptor(key []byte) (*AESEncryptor, error) {
 	return NewAESEncryptorWithMode(key, ModeGCM)
 }
@@ -73,7 +75,18 @@ func NewAESEncryptorWithMode(key []byte, mode EncryptionMode) (*AESEncryptor, er
 	if err != nil {
 		return nil, fmt.Errorf("create AES cipher: %w", err)
 	}
-	return &AESEncryptor{block: block}, nil
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("create GCM: %w", err)
+	}
+	return &AESEncryptor{gcm: gcm}, nil
+}
+
+func (e *AESEncryptor) validate() error {
+	if e == nil || e.gcm == nil {
+		return ErrUninitializedEncryptor
+	}
+	return nil
 }
 
 func encoderFor(encodingType EncodingType) (*base64.Encoding, error) {
@@ -87,31 +100,44 @@ func encoderFor(encodingType EncodingType) (*base64.Encoding, error) {
 	}
 }
 
-// EncryptWithOptions 使用指定编码和 AES-GCM 加密。
-func (e *AESEncryptor) EncryptWithOptions(plaintext []byte, encoding EncodingType) (string, error) {
+// EncryptWithAADAndEncoding 使用指定 Base64 编码及附加认证数据（AAD）执行 AES-GCM 加密。
+// additionalData 参与完整性校验但不被加密，可用于将密文绑定至用户 ID、记录主键等业务上下文。
+func (e *AESEncryptor) EncryptWithAADAndEncoding(plaintext, additionalData []byte, encoding EncodingType) (string, error) {
+	if err := e.validate(); err != nil {
+		return "", err
+	}
 	enc, err := encoderFor(encoding)
 	if err != nil {
 		return "", err
 	}
-	aesGCM, err := cipher.NewGCM(e.block)
-	if err != nil {
-		return "", fmt.Errorf("create GCM: %w", err)
-	}
-	nonce := make([]byte, aesGCM.NonceSize())
+	nonce := make([]byte, e.gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", fmt.Errorf("generate nonce: %w", err)
 	}
-	ciphertext := aesGCM.Seal(nonce, nonce, plaintext, nil)
+	ciphertext := e.gcm.Seal(nonce, nonce, plaintext, additionalData)
 	return enc.EncodeToString(ciphertext), nil
+}
+
+// EncryptWithAAD 使用标准 Base64 编码及附加认证数据（AAD）执行 AES-GCM 加密。
+func (e *AESEncryptor) EncryptWithAAD(plaintext, additionalData []byte) (string, error) {
+	return e.EncryptWithAADAndEncoding(plaintext, additionalData, EncodingStandard)
+}
+
+// EncryptWithOptions 使用指定编码和 AES-GCM 加密。
+func (e *AESEncryptor) EncryptWithOptions(plaintext []byte, encoding EncodingType) (string, error) {
+	return e.EncryptWithAADAndEncoding(plaintext, nil, encoding)
 }
 
 // Encrypt 使用标准 Base64 编码加密。
 func (e *AESEncryptor) Encrypt(plaintext []byte) (string, error) {
-	return e.EncryptWithOptions(plaintext, EncodingStandard)
+	return e.EncryptWithAADAndEncoding(plaintext, nil, EncodingStandard)
 }
 
-// DecryptWithOptions 使用指定编码和 AES-GCM 解密。
-func (e *AESEncryptor) DecryptWithOptions(ciphertext string, encoding EncodingType) ([]byte, error) {
+// DecryptWithAADAndEncoding 使用指定编码及附加认证数据（AAD）执行 AES-GCM 解密与完整性验证。
+func (e *AESEncryptor) DecryptWithAADAndEncoding(ciphertext string, additionalData []byte, encoding EncodingType) ([]byte, error) {
+	if err := e.validate(); err != nil {
+		return nil, err
+	}
 	enc, err := encoderFor(encoding)
 	if err != nil {
 		return nil, err
@@ -120,22 +146,28 @@ func (e *AESEncryptor) DecryptWithOptions(ciphertext string, encoding EncodingTy
 	if err != nil {
 		return nil, fmt.Errorf("decode ciphertext: %w", err)
 	}
-	aesGCM, err := cipher.NewGCM(e.block)
-	if err != nil {
-		return nil, fmt.Errorf("create GCM: %w", err)
-	}
-	nonceSize := aesGCM.NonceSize()
-	if len(data) < nonceSize {
+	nonceSize := e.gcm.NonceSize()
+	if len(data) < nonceSize+e.gcm.Overhead() {
 		return nil, ErrCiphertextTooShort
 	}
-	plaintext, err := aesGCM.Open(nil, data[:nonceSize], data[nonceSize:], nil)
+	plaintext, err := e.gcm.Open(nil, data[:nonceSize], data[nonceSize:], additionalData)
 	if err != nil {
 		return nil, fmt.Errorf("open GCM: %w", err)
 	}
 	return plaintext, nil
 }
 
+// DecryptWithAAD 使用标准 Base64 编码及附加认证数据（AAD）执行 AES-GCM 解密。
+func (e *AESEncryptor) DecryptWithAAD(ciphertext string, additionalData []byte) ([]byte, error) {
+	return e.DecryptWithAADAndEncoding(ciphertext, additionalData, EncodingStandard)
+}
+
+// DecryptWithOptions 使用指定编码和 AES-GCM 解密。
+func (e *AESEncryptor) DecryptWithOptions(ciphertext string, encoding EncodingType) ([]byte, error) {
+	return e.DecryptWithAADAndEncoding(ciphertext, nil, encoding)
+}
+
 // Decrypt 使用标准 Base64 编码解密。
 func (e *AESEncryptor) Decrypt(ciphertext string) ([]byte, error) {
-	return e.DecryptWithOptions(ciphertext, EncodingStandard)
+	return e.DecryptWithAADAndEncoding(ciphertext, nil, EncodingStandard)
 }

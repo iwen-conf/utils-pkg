@@ -39,21 +39,41 @@ const (
 
 // ==================== 核心 API ====================
 
-// NewRich 创建一个纯业务错误 (Service 层使用)
-// 场景：参数校验失败、逻辑不满足
-func NewRich(code int, msg string) *RichError {
+func newRichWithSkip(code int, msg string, skip int) *RichError {
 	return &RichError{
 		Status: Status{
 			Code: code,
 			Msg:  msg,
 		},
 		cause: nil,
-		stack: callers(),
+		stack: callersSkip(skip),
 	}
 }
 
+func wrapRichWithSkip(err error, code int, skip int, format string, args ...interface{}) *RichError {
+	if err == nil {
+		return nil
+	}
+	msg := format
+	if len(args) > 0 {
+		msg = fmt.Sprintf(format, args...)
+	}
+	return &RichError{
+		Status: Status{
+			Code: code,
+			Msg:  msg,
+		},
+		cause: err,
+		stack: callersSkip(skip),
+	}
+}
+
+// NewRich 创建一个纯业务错误 (Service 层使用)
+func NewRich(code int, msg string) *RichError {
+	return newRichWithSkip(code, msg, 4)
+}
+
 // NewRichNoStack 创建不捕获堆栈的业务错误（高性能场景）
-// 适用：不需要堆栈跟踪的简单业务错误，如参数校验
 func NewRichNoStack(code int, msg string) *RichError {
 	return &RichError{
 		Status: Status{
@@ -61,31 +81,13 @@ func NewRichNoStack(code int, msg string) *RichError {
 			Msg:  msg,
 		},
 		cause: nil,
-		stack: nil, // 不捕获堆栈
+		stack: nil,
 	}
 }
 
 // WrapRich 包装一个底层错误 (Repo 层使用)
-// 场景：数据库报错、第三方 API 报错
-// 作用：把脏错误藏在 cause 里，给外面返回一个干净的 code/msg
 func WrapRich(err error, code int, format string, args ...interface{}) *RichError {
-	if err == nil {
-		return nil
-	}
-
-	msg := format
-	if len(args) > 0 {
-		msg = fmt.Sprintf(format, args...)
-	}
-
-	return &RichError{
-		Status: Status{
-			Code: code,
-			Msg:  msg,
-		},
-		cause: err,
-		stack: callers(),
-	}
+	return wrapRichWithSkip(err, code, 4, format, args...)
 }
 
 // WrapRichNoStack 包装错误但不捕获堆栈（高性能场景）
@@ -105,12 +107,12 @@ func WrapRichNoStack(err error, code int, format string, args ...interface{}) *R
 			Msg:  msg,
 		},
 		cause: err,
-		stack: nil, // 不捕获堆栈
+		stack: nil,
 	}
 }
 
 // FromRichError 智能转换 (Controller/Response 层使用)
-// 作用：把任意 error 还原成 *RichError，非 RichError 转为系统错误
+// 把任意 error 还原成 *RichError，非 RichError 转为系统内部错误。
 func FromRichError(err error) *RichError {
 	if err == nil {
 		return nil
@@ -120,48 +122,45 @@ func FromRichError(err error) *RichError {
 		return e
 	}
 
-	// 其他错误统一包装成系统内部错误
 	return &RichError{
 		Status: Status{
 			Code: RichCodeInternal,
 			Msg:  RichMsgInternal,
 		},
 		cause: err,
-		stack: callers(),
+		stack: callersSkip(3),
 	}
 }
 
 // ==================== HTTP 状态码映射 ====================
 
-// HTTPStatus 根据业务码自动推导 HTTP 状态码
-// 规则：取业务码前3位作为 HTTP 状态码，0 返回 200
+// HTTPStatus 根据业务码自动推导 HTTP 状态码（取前 3 位，0 返回 200）
 func (e *RichError) HTTPStatus() int {
 	if e == nil || e.Code == 0 {
 		return 200
 	}
-	// 取前3位：500001 -> 500, 404001 -> 404
 	httpCode := e.Code / 1000
 	if httpCode >= 100 && httpCode <= 599 {
 		return httpCode
 	}
-	return 500 // 默认服务端错误
+	return 500
 }
 
 // ==================== 快捷构造函数 ====================
 
 // RichBadRequest 创建参数错误
 func RichBadRequest(msg string) *RichError {
-	return NewRich(RichCodeBadRequest, msg)
+	return newRichWithSkip(RichCodeBadRequest, msg, 4)
 }
 
 // RichUnauthorized 创建未认证错误
 func RichUnauthorized() *RichError {
-	return NewRich(RichCodeUnauthorized, RichMsgUnauthorized)
+	return newRichWithSkip(RichCodeUnauthorized, RichMsgUnauthorized, 4)
 }
 
 // RichForbidden 创建无权限错误
 func RichForbidden() *RichError {
-	return NewRich(RichCodeForbidden, RichMsgForbidden)
+	return newRichWithSkip(RichCodeForbidden, RichMsgForbidden, 4)
 }
 
 // RichNotFound 创建资源不存在错误
@@ -170,17 +169,17 @@ func RichNotFound(resource string) *RichError {
 	if resource != "" {
 		msg = resource + "不存在"
 	}
-	return NewRich(RichCodeNotFound, msg)
+	return newRichWithSkip(RichCodeNotFound, msg, 4)
 }
 
 // RichInternal 创建系统内部错误（隐藏底层错误）
 func RichInternal(err error) *RichError {
-	return WrapRich(err, RichCodeInternal, RichMsgInternal)
+	return wrapRichWithSkip(err, RichCodeInternal, 4, RichMsgInternal)
 }
 
 // RichDBError 创建数据库错误
 func RichDBError(err error) *RichError {
-	return WrapRich(err, RichCodeDBError, RichMsgInternal)
+	return wrapRichWithSkip(err, RichCodeDBError, 4, RichMsgInternal)
 }
 
 // ==================== 判断函数 ====================
@@ -225,8 +224,13 @@ func IsServerError(err error) bool {
 
 // ==================== 链式方法 ====================
 
-// WithCode 修改业务码（返回新对象）
+// WithCode 修改业务码（返回新对象；nil 接收者安全）
 func (e *RichError) WithCode(code int) *RichError {
+	if e == nil {
+		return &RichError{
+			Status: Status{Code: code, Msg: RichMsgInternal},
+		}
+	}
 	return &RichError{
 		Status: Status{Code: code, Msg: e.Msg},
 		cause:  e.cause,
@@ -234,8 +238,13 @@ func (e *RichError) WithCode(code int) *RichError {
 	}
 }
 
-// WithMsg 修改提示语（返回新对象）
+// WithMsg 修改提示语（返回新对象；nil 接收者安全）
 func (e *RichError) WithMsg(msg string) *RichError {
+	if e == nil {
+		return &RichError{
+			Status: Status{Code: RichCodeInternal, Msg: msg},
+		}
+	}
 	return &RichError{
 		Status: Status{Code: e.Code, Msg: msg},
 		cause:  e.cause,

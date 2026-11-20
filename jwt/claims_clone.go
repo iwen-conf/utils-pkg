@@ -34,6 +34,9 @@ func cloneStandardClaims(src *StandardClaims) (*StandardClaims, error) {
 	cloned.ExpiresAt = cloneNumericDate(src.ExpiresAt)
 	cloned.NotBefore = cloneNumericDate(src.NotBefore)
 	cloned.IssuedAt = cloneNumericDate(src.IssuedAt)
+	if src.profile != nil {
+		cloned.profile = src.profile.clone()
+	}
 
 	custom, err := cloneClaimValue(src.CustomClaims)
 	if err != nil {
@@ -59,6 +62,13 @@ func cloneClaimValue(v any) (any, error) {
 		uint, uint8, uint16, uint32, uint64,
 		json.Number:
 		return x, nil
+	case []byte:
+		if x == nil {
+			return []byte(nil), nil
+		}
+		dst := make([]byte, len(x))
+		copy(dst, x)
+		return dst, nil
 	case []string:
 		return cloneStringSlice(x), nil
 	case map[string]string:

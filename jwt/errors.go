@@ -17,9 +17,11 @@ var (
 	ErrInvalidCleanupInterval = errors.New("blacklist clean interval must be non-negative")
 	// ErrUnknownRefreshReuseAction 表示未知的 refresh 复用动作。
 	ErrUnknownRefreshReuseAction = errors.New("unknown refresh token reuse action")
-	// ErrUnknownTokenType 表示未知令牌类型。
+	// ErrUnknownTokenType 表示未知或缺失的令牌类型。
 	ErrUnknownTokenType = errors.New("unknown token type")
-	// ErrInvalidTokenExpiry 表示动态设置的过期时间非法。
+	// ErrTokenTypeMismatch 表示令牌类型与当前操作要求的用途不匹配（如将 refresh token 当作 access token 验证）。
+	ErrTokenTypeMismatch = errors.New("unexpected token type")
+	// ErrInvalidTokenExpiry 表示动态或单次设置的过期时间非法。
 	ErrInvalidTokenExpiry = errors.New("token expiry must be positive")
 	// ErrBlacklistSizeUnsupported 表示吊销存储不支持统计。
 	ErrBlacklistSizeUnsupported = errors.New("revocation store does not support size")
@@ -33,4 +35,20 @@ var (
 	ErrRefreshReuseDetected = errors.New("refresh token reuse detected")
 	// ErrInvalidClaimType 表示注册 claim 类型非法。
 	ErrInvalidClaimType = errors.New("invalid registered claim type")
+	// ErrEmptySubject 表示签发令牌时 subject 为空或仅空白字符。
+	ErrEmptySubject = errors.New("subject cannot be empty")
+	// ErrEmptyToken 表示传入令牌为空字符串。
+	ErrEmptyToken = errors.New("token cannot be empty")
+	// ErrInvalidTokenFormat 表示令牌不满足三段式 JWT 基本格式或超过最大长度。
+	ErrInvalidTokenFormat = errors.New("invalid token format")
+	// ErrTokenTooLarge 表示令牌长度超过安全上限。
+	ErrTokenTooLarge = errors.New("token exceeds maximum length")
+	// ErrInvalidToken 表示底层解析器返回了无效令牌对象。
+	ErrInvalidToken = errors.New("invalid token")
+	// ErrReservedClaimKey 表示自定义声明或身份配置占用了 JWT 保留字段。
+	ErrReservedClaimKey = errors.New("custom claim key is reserved")
+	// ErrDuplicateClaimKey 表示自定义声明或身份配置存在重复冲突字段。
+	ErrDuplicateClaimKey = errors.New("duplicate claim key")
+	// ErrMissingTokenID 表示需要一次性消费的令牌缺少 jti。
+	ErrMissingTokenID = errors.New("refresh token missing jti")
 )

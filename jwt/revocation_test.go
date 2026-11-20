@@ -71,8 +71,8 @@ func TestTokenManagerRevokeSessionRejectsCachedSessionTokens(t *testing.T) {
 	if _, err := validator.ValidateToken(pair.AccessToken); err != nil {
 		t.Fatalf("ValidateToken(access before revoke) error = %v", err)
 	}
-	if _, err := validator.ValidateToken(pair.RefreshToken); err != nil {
-		t.Fatalf("ValidateToken(refresh before revoke) error = %v", err)
+	if _, err := validator.ValidateRefreshToken(context.Background(), pair.RefreshToken); err != nil {
+		t.Fatalf("ValidateRefreshToken(refresh before revoke) error = %v", err)
 	}
 	if err := issuer.RevokeSession(pair.AccessToken); err != nil {
 		t.Fatalf("RevokeSession(first) error = %v", err)
@@ -84,8 +84,8 @@ func TestTokenManagerRevokeSessionRejectsCachedSessionTokens(t *testing.T) {
 	if _, err := validator.ValidateToken(pair.AccessToken); !errors.Is(err, ErrSessionRevoked) {
 		t.Fatalf("ValidateToken(access after revoke) error = %v, want ErrSessionRevoked", err)
 	}
-	if _, err := validator.ValidateToken(pair.RefreshToken); !errors.Is(err, ErrSessionRevoked) {
-		t.Fatalf("ValidateToken(refresh after revoke) error = %v, want ErrSessionRevoked", err)
+	if _, err := validator.ValidateRefreshToken(context.Background(), pair.RefreshToken); !errors.Is(err, ErrSessionRevoked) {
+		t.Fatalf("ValidateRefreshToken(refresh after revoke) error = %v, want ErrSessionRevoked", err)
 	}
 }
 

@@ -1,9 +1,9 @@
 package jwt
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -43,19 +43,19 @@ func normalizeTokenProfile(profile *TokenProfile) TokenProfile {
 		return *defaults
 	}
 	normalized := *profile
-	if normalized.ActorTypeClaim == "" {
+	if strings.TrimSpace(normalized.ActorTypeClaim) == "" {
 		normalized.ActorTypeClaim = defaults.ActorTypeClaim
 	}
-	if normalized.ActorIDClaim == "" {
+	if strings.TrimSpace(normalized.ActorIDClaim) == "" {
 		normalized.ActorIDClaim = defaults.ActorIDClaim
 	}
-	if normalized.TenantIDClaim == "" {
+	if strings.TrimSpace(normalized.TenantIDClaim) == "" {
 		normalized.TenantIDClaim = defaults.TenantIDClaim
 	}
-	if normalized.RolesClaim == "" {
+	if strings.TrimSpace(normalized.RolesClaim) == "" {
 		normalized.RolesClaim = defaults.RolesClaim
 	}
-	if normalized.ScopesClaim == "" {
+	if strings.TrimSpace(normalized.ScopesClaim) == "" {
 		normalized.ScopesClaim = defaults.ScopesClaim
 	}
 	return normalized
@@ -66,7 +66,15 @@ func (p TokenProfile) clone() *TokenProfile {
 	return &cloned
 }
 
-// Identity is the normalized business identity used to issue tokens across entry points.
+func (p TokenProfile) isProfileClaimKey(key string) bool {
+	return key == p.ActorTypeClaim ||
+		key == p.ActorIDClaim ||
+		key == p.TenantIDClaim ||
+		key == p.RolesClaim ||
+		key == p.ScopesClaim
+}
+
+// Identity is the normalized business identity used to issue and authenticate tokens across entry points.
 type Identity struct {
 	// Subject becomes the JWT sub claim and must be stable for the authenticated account.
 	Subject string
@@ -80,7 +88,7 @@ type Identity struct {
 	SessionID string
 	Roles     []string
 	Scopes    []string
-	// CustomClaims carries project-specific data. It must not collide with normalized keys.
+	// CustomClaims carries project-specific data. It must not collide with reserved or normalized keys.
 	CustomClaims map[string]interface{}
 }
 
@@ -92,7 +100,7 @@ type TokenPairOptions struct {
 	CustomClaims   map[string]interface{}
 }
 
-// TokenPair contains a rotated access/refresh token pair.
+// TokenPair contains an issued or rotated access/refresh token pair.
 type TokenPair struct {
 	AccessToken      string
 	RefreshToken     string
@@ -102,15 +110,68 @@ type TokenPair struct {
 	RefreshExpiresIn int64
 }
 
-// GenerateIdentityToken signs a single token using normalized identity claims.
+// IssueTokenPair 是推荐的主入口：按统一业务身份签发共享会话 ID 的 Access/Refresh 令牌对。
+func (m *TokenManager) IssueTokenPair(identity Identity, options ...*TokenPairOptions) (*TokenPair, error) {
+	opts := defaultTokenPairOptions(options...)
+	if strings.TrimSpace(opts.SessionID) == "" {
+		opts.SessionID = strings.TrimSpace(identity.SessionID)
+	}
+
+	commonClaims, err := m.identityClaims(identity, opts.CustomClaims)
+	if err != nil {
+		return nil, err
+	}
+	opts.CustomClaims = commonClaims
+
+	return m.GenerateTokenPair(strings.TrimSpace(identity.Subject), opts)
+}
+
+// IssueAccessToken 按统一业务身份签发单个访问令牌（强制 TokenType 为 AccessToken）。
+func (m *TokenManager) IssueAccessToken(identity Identity, options ...*TokenOptions) (string, error) {
+	var tokenOptions *TokenOptions
+	if len(options) > 0 && options[0] != nil {
+		if options[0].TokenType != "" && options[0].TokenType != AccessToken {
+			return "", fmt.Errorf("%w: IssueAccessToken only issues %q, got %q", ErrTokenTypeMismatch, AccessToken, options[0].TokenType)
+		}
+		tokenOptions = cloneTokenOptions(options[0])
+	} else {
+		tokenOptions = DefaultTokenOptions()
+	}
+	tokenOptions.TokenType = AccessToken
+	return m.GenerateIdentityToken(identity, tokenOptions)
+}
+
+// Authenticate 是推荐的鉴权入口：验证 AccessToken 并直接返回归一化业务身份与声明。
+// 若传入 RefreshToken、吊销令牌或会话已注销，均安全拒绝。
+func (m *TokenManager) Authenticate(ctx context.Context, tokenStr string) (Identity, *StandardClaims, error) {
+	claims, err := m.ValidateAccessToken(ctx, tokenStr)
+	if err != nil {
+		return Identity{}, nil, err
+	}
+	return m.ExtractIdentity(claims), claims, nil
+}
+
+// ExtractIdentity 使用当前管理器的 TokenProfile 从声明中提取业务身份。
+func (m *TokenManager) ExtractIdentity(claims *StandardClaims) Identity {
+	if claims == nil {
+		return Identity{}
+	}
+	return claims.Identity(&m.tokenProfile)
+}
+
+// GenerateIdentityTokenPair 兼容入口：等同于 IssueTokenPair。
+func (m *TokenManager) GenerateIdentityTokenPair(identity Identity, options ...*TokenPairOptions) (*TokenPair, error) {
+	return m.IssueTokenPair(identity, options...)
+}
+
+// GenerateIdentityToken 使用归一化业务身份签发单个令牌。
 func (m *TokenManager) GenerateIdentityToken(identity Identity, options ...*TokenOptions) (string, error) {
 	tokenOptions := DefaultTokenOptions()
 	if len(options) > 0 && options[0] != nil {
-		tokenOptions = options[0]
+		tokenOptions = cloneTokenOptions(options[0])
 	}
 
-	if tokenOptions.SessionID == "" {
-		tokenOptions = cloneTokenOptions(tokenOptions)
+	if strings.TrimSpace(tokenOptions.SessionID) == "" {
 		tokenOptions.SessionID = strings.TrimSpace(identity.SessionID)
 	}
 
@@ -118,17 +179,16 @@ func (m *TokenManager) GenerateIdentityToken(identity Identity, options ...*Toke
 	if err != nil {
 		return "", err
 	}
-	tokenOptions = cloneTokenOptions(tokenOptions)
 	tokenOptions.CustomClaims = claims
 
 	return m.GenerateToken(strings.TrimSpace(identity.Subject), tokenOptions)
 }
 
-// GenerateTokenPair signs access and refresh tokens with one shared session id.
+// GenerateTokenPair 为指定 subject 签发共享同一 SessionID 的 Access/Refresh 令牌对。
 func (m *TokenManager) GenerateTokenPair(subject string, options ...*TokenPairOptions) (*TokenPair, error) {
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
-		return nil, errors.New("subject cannot be empty")
+		return nil, ErrEmptySubject
 	}
 
 	opts := defaultTokenPairOptions(options...)
@@ -169,28 +229,37 @@ func (m *TokenManager) GenerateTokenPair(subject string, options ...*TokenPairOp
 	}, nil
 }
 
-// GenerateIdentityTokenPair signs access and refresh tokens using normalized identity claims.
-func (m *TokenManager) GenerateIdentityTokenPair(identity Identity, options ...*TokenPairOptions) (*TokenPair, error) {
-	opts := defaultTokenPairOptions(options...)
-	if opts.SessionID == "" {
-		opts.SessionID = strings.TrimSpace(identity.SessionID)
-	}
-
-	commonClaims, err := m.identityClaims(identity, opts.CustomClaims)
-	if err != nil {
-		return nil, err
-	}
-	opts.CustomClaims = commonClaims
-
-	return m.GenerateTokenPair(strings.TrimSpace(identity.Subject), opts)
-}
-
-// Identity returns normalized identity fields from claims using the default token profile.
+// Identity 从声明中还原业务身份。
+// 未显式传入 profile 时，自动优先使用验证该令牌的 TokenManager 所配置的 TokenProfile，
+// 且返回的 Identity.CustomClaims 仅保留纯业务自定义字段（不混入归一化身份键），可直接再次用于签发。
 func (c *StandardClaims) Identity(profile ...*TokenProfile) Identity {
 	if c == nil {
 		return Identity{}
 	}
-	p := normalizeTokenProfile(firstProfile(profile...))
+	selected := firstProfile(profile...)
+	if selected == nil {
+		selected = c.profile
+	}
+	p := normalizeTokenProfile(selected)
+
+	var pureCustom map[string]interface{}
+	if len(c.CustomClaims) > 0 {
+		for k, v := range c.CustomClaims {
+			if p.isProfileClaimKey(k) {
+				continue
+			}
+			if pureCustom == nil {
+				pureCustom = make(map[string]interface{})
+			}
+			clonedVal, err := cloneClaimValue(v)
+			if err == nil {
+				pureCustom[k] = clonedVal
+			} else {
+				pureCustom[k] = v
+			}
+		}
+	}
+
 	return Identity{
 		Subject:      c.Subject,
 		ActorType:    stringFromClaim(c.CustomClaims[p.ActorTypeClaim]),
@@ -199,14 +268,21 @@ func (c *StandardClaims) Identity(profile ...*TokenProfile) Identity {
 		SessionID:    c.SessionID,
 		Roles:        stringSliceFromClaim(c.CustomClaims[p.RolesClaim]),
 		Scopes:       stringSliceFromClaim(c.CustomClaims[p.ScopesClaim]),
-		CustomClaims: cloneMapClaims(c.CustomClaims),
+		CustomClaims: pureCustom,
 	}
 }
 
 func (m *TokenManager) identityClaims(identity Identity, extra map[string]interface{}) (map[string]interface{}, error) {
 	identity.Subject = strings.TrimSpace(identity.Subject)
 	if identity.Subject == "" {
-		return nil, errors.New("identity subject cannot be empty")
+		return nil, fmt.Errorf("%w: identity subject cannot be empty", ErrEmptySubject)
+	}
+
+	if err := validateCustomClaimsKeys(identity.CustomClaims); err != nil {
+		return nil, err
+	}
+	if err := validateCustomClaimsKeys(extra); err != nil {
+		return nil, err
 	}
 
 	claims := makeMapClaims(identity.CustomClaims)
@@ -256,8 +332,18 @@ func pairTokenOptions(options *TokenOptions, tokenType TokenType, sessionID stri
 	if opts == nil {
 		opts = DefaultTokenOptions()
 	}
+	if opts.TokenType != "" && options != nil && options.TokenType != "" && options.TokenType != tokenType {
+		return nil, fmt.Errorf("%w: pair %s options cannot override token type to %q", ErrTokenTypeMismatch, tokenType, options.TokenType)
+	}
 	opts.TokenType = tokenType
 	opts.SessionID = sessionID
+
+	if err := validateCustomClaimsKeys(common); err != nil {
+		return nil, err
+	}
+	if err := validateCustomClaimsKeys(opts.CustomClaims); err != nil {
+		return nil, err
+	}
 
 	claims := makeMapClaims(common)
 	if err := mergeMapClaims(claims, opts.CustomClaims); err != nil {
@@ -293,6 +379,9 @@ func putClaim(claims map[string]interface{}, key string, value interface{}) erro
 	if key == "" {
 		return nil
 	}
+	if _, exists := claims[key]; exists {
+		return fmt.Errorf("%w: custom claim %q conflicts with normalized identity claim", ErrDuplicateClaimKey, key)
+	}
 
 	switch v := value.(type) {
 	case string:
@@ -306,9 +395,6 @@ func putClaim(claims map[string]interface{}, key string, value interface{}) erro
 		value = cloneStringSlice(v)
 	}
 
-	if _, exists := claims[key]; exists {
-		return fmt.Errorf("custom claim %q conflicts with normalized identity claim", key)
-	}
 	claims[key] = value
 	return nil
 }
@@ -316,7 +402,7 @@ func putClaim(claims map[string]interface{}, key string, value interface{}) erro
 func mergeMapClaims(dst map[string]interface{}, src map[string]interface{}) error {
 	for k, v := range src {
 		if _, exists := dst[k]; exists {
-			return fmt.Errorf("custom claim %q is defined more than once", k)
+			return fmt.Errorf("%w: custom claim %q is defined more than once", ErrDuplicateClaimKey, k)
 		}
 		dst[k] = v
 	}
@@ -393,7 +479,7 @@ func stringSliceFromClaim(value interface{}) []string {
 
 func generateRandomHex(byteLen int) (string, error) {
 	if byteLen <= 0 {
-		return "", errors.New("byte length must be positive")
+		return "", fmt.Errorf("byte length must be positive")
 	}
 	b := make([]byte, byteLen)
 	if _, err := rand.Read(b); err != nil {

@@ -1,5 +1,7 @@
 package pagination
 
+import "math"
+
 // OffsetRequest 表示基于偏移量的分页请求参数。
 // - Offset: 跳过的记录数（从 0 开始）
 // - Limit: 本页希望返回的最大记录数
@@ -19,6 +21,9 @@ type OffsetResponse struct {
 // Normalize 对请求的 Offset 和 Limit 进行归一化（默认值与上限钳制）。
 // Offset 必须 >= 0，Limit 应用默认值与上限。
 func (r *OffsetRequest) Normalize() {
+	if r == nil {
+		return
+	}
 	if r.Offset < 0 {
 		r.Offset = 0
 	}
@@ -30,39 +35,92 @@ func (r *OffsetRequest) Normalize() {
 	}
 }
 
-// GetNextOffset 计算下一页的偏移量。
-// 如果当前页已是最后一页，返回当前偏移量。
+// GetNextOffset 计算下一页的偏移量（做饱和加法保护，防止超大 Offset 发生 int 溢出）。
 func (r *OffsetRequest) GetNextOffset() int {
-	return r.Offset + r.Limit
+	if r == nil {
+		return 0
+	}
+	offset := r.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	limit := r.Limit
+	if limit <= 0 {
+		return offset
+	}
+	if offset > math.MaxInt-limit {
+		return math.MaxInt
+	}
+	return offset + limit
 }
 
 // GetPrevOffset 计算上一页的偏移量。
 // 如果已是第一页，返回 0。
 func (r *OffsetRequest) GetPrevOffset() int {
-	prev := r.Offset - r.Limit
-	if prev < 0 {
+	if r == nil || r.Offset <= 0 {
 		return 0
 	}
-	return prev
+	if r.Limit <= 0 {
+		return r.Offset
+	}
+	if r.Offset <= r.Limit {
+		return 0
+	}
+	return r.Offset - r.Limit
+}
+
+func saturatingAddInt64(a, b int64) int64 {
+	if b > 0 && a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+	return a + b
 }
 
 // Calculate 根据总记录数计算分页元信息。
 // total: 符合条件的总记录数
 // actualCount: 本次查询实际返回的记录数
 func (r *OffsetResponse) Calculate(req OffsetRequest, total int64, actualCount int) {
-	r.Offset = req.Offset
+	if r == nil {
+		return
+	}
+	offset := req.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	if total < 0 {
+		total = 0
+	}
+	if actualCount < 0 {
+		actualCount = 0
+	}
+	r.Offset = offset
 	r.Limit = req.Limit
 	r.Total = total
-	// 判断是否还有下一页
-	r.HasMore = int64(req.Offset+actualCount) < total
+	end := saturatingAddInt64(int64(offset), int64(actualCount))
+	r.HasMore = end < total
 }
 
 // IsFirstPage 判断是否为第一页。
 func (r *OffsetRequest) IsFirstPage() bool {
-	return r.Offset == 0
+	if r == nil {
+		return true
+	}
+	return r.Offset <= 0
 }
 
-// IsLastPage 判断是否为最后一页（需要知道总记录数）。
+// IsLastPage 判断是否为最后一页（需要知道总记录数；防止超大 Offset 溢出）。
 func (r *OffsetRequest) IsLastPage(total int64) bool {
-	return int64(r.Offset+r.Limit) >= total
+	if r == nil || total <= 0 {
+		return true
+	}
+	offset := r.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	limit := r.Limit
+	if limit < 0 {
+		limit = 0
+	}
+	end := saturatingAddInt64(int64(offset), int64(limit))
+	return end >= total
 }

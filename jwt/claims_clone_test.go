@@ -173,17 +173,20 @@ func TestCheckCache_CloneFailureReturnsErrorAndHit(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
 
-	tm.cacheLock.Lock()
-	tm.cache["bad"] = cacheItem{
+	now := tm.now()
+	tm.cache.mu.Lock()
+	el := tm.cache.order.PushFront(&cachedClaimsEntry{
+		key: "bad",
 		claims: &StandardClaims{
 			CustomClaims: map[string]interface{}{"bad": make(chan int)},
 		},
-		timestamp:  time.Now(),
-		validUntil: time.Now().Add(time.Minute),
-	}
-	tm.cacheLock.Unlock()
+		createdAt:  now,
+		validUntil: now.Add(time.Minute),
+	})
+	tm.cache.items["bad"] = el
+	tm.cache.mu.Unlock()
 
-	claims, err, found := tm.checkCache("bad")
+	claims, err, found := tm.cache.get("bad", now)
 	if !found {
 		t.Fatalf("expected hit")
 	}

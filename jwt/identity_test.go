@@ -46,9 +46,12 @@ func TestTokenManager_GenerateIdentityTokenPair(t *testing.T) {
 		t.Fatalf("unexpected roles: %q", got)
 	}
 
-	refreshClaims, err := manager.ValidateToken(pair.RefreshToken)
+	if _, err := manager.ValidateToken(pair.RefreshToken); err == nil {
+		t.Fatal("ValidateToken must reject refresh token")
+	}
+	refreshClaims, err := manager.ValidateRefreshToken(nil, pair.RefreshToken)
 	if err != nil {
-		t.Fatalf("ValidateToken refresh error: %v", err)
+		t.Fatalf("ValidateRefreshToken error: %v", err)
 	}
 	if refreshClaims.TokenType != RefreshToken {
 		t.Fatalf("expected refresh token type, got %q", refreshClaims.TokenType)
@@ -133,9 +136,9 @@ func TestTokenManager_RefreshToken_PreservesCustomClaims(t *testing.T) {
 		t.Fatalf("expected rotated access token to preserve identity claims, got %+v", accessClaims.CustomClaims)
 	}
 
-	refreshClaims, err := manager.ValidateToken(newRefresh)
+	refreshClaims, err := manager.ValidateRefreshToken(nil, newRefresh)
 	if err != nil {
-		t.Fatalf("ValidateToken new refresh error: %v", err)
+		t.Fatalf("ValidateRefreshToken new refresh error: %v", err)
 	}
 	if refreshClaims.Identity().ActorType != "user" {
 		t.Fatalf("expected rotated refresh token to preserve identity claims, got %+v", refreshClaims.CustomClaims)

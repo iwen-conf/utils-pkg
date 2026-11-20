@@ -54,10 +54,15 @@ const (
 	MinLimit = 1
 	// RecommendedHMACKeySize HMAC 密钥推荐最小长度（字节）
 	RecommendedHMACKeySize = 32
+	// MaxCursorLength 游标字符串最大允许长度，防止恶意超大游标导致内存放大。
+	MaxCursorLength = 16384
 )
 
 // Normalize 对请求的 Limit 进行归一化（默认值与上限钳制）
 func (r *CursorRequest) Normalize() {
+	if r == nil {
+		return
+	}
 	if r.Limit < MinLimit {
 		r.Limit = DefaultLimit
 	}
@@ -86,6 +91,9 @@ func (Base64JSONCodec) Encode(v any) (string, error) {
 func (Base64JSONCodec) Decode(s string, v any) error {
 	if s == "" {
 		return ErrEmptyCursor
+	}
+	if len(s) > MaxCursorLength {
+		return ErrInvalidCursorFormat
 	}
 	b, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
@@ -151,6 +159,12 @@ func (c *HMACCodec) Encode(v any) (string, error) {
 func (c *HMACCodec) Decode(s string, v any) error {
 	if err := c.validate(); err != nil {
 		return err
+	}
+	if s == "" {
+		return ErrEmptyCursor
+	}
+	if len(s) > MaxCursorLength {
+		return ErrInvalidCursorFormat
 	}
 	parts := strings.Split(s, ".")
 	if len(parts) != 3 || parts[0] != "v1" {
