@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
-## [0.4.0] - 待发布
+## [0.5.0] - 待发布
 
 Technical candidate. Public release remains blocked until a license is chosen (T06-06).
 
@@ -36,7 +36,11 @@ Technical candidate. Public release remains blocked until a license is chosen (T
 - **Errors**: `Is/As` match the standard library; default `RichError` JSON outputs only `code` and `msg`; `RichError.WithCode`/`WithMsg` and legacy `*Error` methods are nil-safe; stack capture uses `runtime.CallersFrames` and skips shortcut helper frames; `Clone` safely handles `nil` inside context maps/slices.
 - **Slice**: `Union` and `Difference` always allocate independent slices and deduplicate properly when an input is empty; `Sort` uses `slices.Sort` for total `NaN` ordering; unused parallel helpers and `slice.LRUCache` removed.
 - **User-Agent**: `LRUCache`/`ShardedCache` validate capacity/TTL on construction and handle nil receivers safely; IE (`MSIE` and `Trident/rv:`) version extraction fixed; oversized `User-Agent` inputs (`> 512` bytes) are truncated and excluded from the global cache; results remain heuristic only.
-- `Version()` is `v0.4.0`.
+- `Version()` is `v0.5.0`.
+
+## [0.4.0]
+
+Technical candidate tagged at `9459a63`. Production-readiness remediations: HS256 JWT with required `exp`, URL v2 signatures, AES-GCM only, fail-closed captcha/KDF, standard error chains, and User-Agent heuristic contract.
 
 ## [0.3.0]
 
