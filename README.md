@@ -10,7 +10,6 @@
 | :--- | :--- | :--- |
 | [`jwt`](jwt/) | HS256 令牌签发、归一化业务身份 `Identity`、Access/Refresh 严格用途隔离、原子 Refresh Rotation 防重放、Token/Session 双级可插拔吊销、O(1) 受限验证缓存 | [jwt/使用说明.md](jwt/使用说明.md) |
 | [`crypto`](crypto/) | AES-GCM 认证加密（支持 AAD 上下文绑定）、Argon2id / scrypt / bcrypt 密码哈希（KDF 计算前校验参数上界）、并发安全密码策略 | [crypto/使用说明.md](crypto/使用说明.md) |
-| [`errors`](errors/) | 内外分离的 `RichError`（JSON 仅输出 `code`/`msg`，日志 `%+v` 输出根因与调用栈），完整兼容标准库 `errors.Is` / `errors.As` | [errors/README.md](errors/README.md) |
 | [`url`](url/) | 绑定 HTTP Method / Scheme / Host / Path / Query 的 v2 HMAC-SHA256 签名 URL，32 字节密钥下限，强制 `_exp` 过期控制 | [url/使用说明.md](url/使用说明.md) |
 | [`pagination`](pagination/) | 游标分页（`Base64JSONCodec` / 防篡改 `HMACCodec`）与防溢出偏移量分页（`OffsetRequest` / `OffsetResponse`） | [pagination/使用说明.md](pagination/使用说明.md) |
 | [`captcha`](captcha/) | 基于 `crypto/rand` 的验证码生成与恒定时间比对（库不持有 TTL、限流与消费状态，空值永不通过） | [captcha/使用说明.md](captcha/使用说明.md) |
@@ -134,33 +133,7 @@ func main() {
 }
 ```
 
-### 3. 内外有别的业务错误处理（`errors`）
-
-```go
-package main
-
-import (
-	"encoding/json"
-	stderrors "errors"
-	"fmt"
-
-	"github.com/iwen-conf/utils-pkg/errors"
-)
-
-func main() {
-	dbErr := stderrors.New("dial tcp 10.0.0.8:5432: i/o timeout")
-	err := errors.WrapRich(dbErr, errors.RichCodeDBError, "查询账户失败")
-
-	// 对外响应：仅序列化 code 与 msg，绝不泄露底层数据库地址或根因
-	body, _ := json.Marshal(err)
-	fmt.Printf("HTTP=%d JSON=%s\n", err.HTTPStatus(), body)
-
-	// 对内诊断：兼容标准 errors.Is，且 %+v 输出完整根因与调用栈
-	fmt.Println("is dbErr:", errors.Is(err, dbErr))
-}
-```
-
-### 4. 泛型指针与验证码辅助（`ptr` / `captcha`）
+### 3. 泛型指针与验证码辅助（`ptr` / `captcha`）
 
 ```go
 nick := ptr.Of("Alice")

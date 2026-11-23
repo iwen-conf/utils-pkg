@@ -2,7 +2,6 @@
 set -euo pipefail
 
 COVERAGE_MIN_TOTAL="${COVERAGE_MIN_TOTAL:-75.0}"
-COVERAGE_MIN_ERRORS="${COVERAGE_MIN_ERRORS:-65.0}"
 COVERAGE_MIN_SLICE="${COVERAGE_MIN_SLICE:-80.0}"
 COVERAGE_MIN_USERAGENT="${COVERAGE_MIN_USERAGENT:-80.0}"
 COVERAGE_MIN_JWT="${COVERAGE_MIN_JWT:-80.0}"
@@ -49,7 +48,6 @@ check_pkg() {
   fail_if_below "$pkg" "$(cover_total "$profile")" "$min"
 }
 
-check_pkg errors "$COVERAGE_MIN_ERRORS" errors
 check_pkg slice "$COVERAGE_MIN_SLICE" slice
 check_pkg useragent "$COVERAGE_MIN_USERAGENT" useragent
 check_pkg jwt "$COVERAGE_MIN_JWT" jwt

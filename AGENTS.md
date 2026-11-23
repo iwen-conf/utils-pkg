@@ -8,7 +8,6 @@ Go 1.24 utility module. Prefer fail-fast constructors, standard `%w` + `errors.I
 - URL: v2 canonical request; no legacy fallback.
 - Captcha: empty expected/input fails; library does not own TTL or attempt limits.
 - Crypto: AES-GCM only; KDF params validated before compute.
-- Errors: recommend RichError; default JSON is `code`/`msg` only.
 - User-Agent: heuristic only, not a security control.
 
 ## Gates

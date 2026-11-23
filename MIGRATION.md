@@ -86,11 +86,11 @@ err = tm.RevokeSessionByID(ctx, newPair.SessionID)
 
 ---
 
-## 三、Errors 模块迁移
+## 三、Errors 模块移除
 
-- 推荐使用 `errors.NewRich`、`errors.WrapRich`、`errors.FromRichError` 以及标准库 `errors.Is` / `errors.As`。
-- `RichError` JSON 序列化默认仅输出 `{"code": ..., "msg": ...}`，防止向前端泄露数据库错误或内部 IP；服务端日志使用 `fmt.Sprintf("%+v", err)` 打印根因与精确调用栈。
-- 旧版 `errors.Error`、`Builder`、`Validator` 已标记 `Deprecated` 并保留兼容（详见 [errors/MIGRATION.md](errors/MIGRATION.md)）。
+- `github.com/iwen-conf/utils-pkg/errors`（包含 `RichError` 以及旧版 `errors.Error` / `Builder` / `Validator`）已于 `v0.5.1` 之后正式移除。
+- 通用错误链与错误判断请直接使用 Go 标准库 `errors`（`fmt.Errorf("%w", ...)`、`errors.Is`、`errors.As`）。
+- 业务状态码、面向客户端的安全文案等应用层错误契约建议在各业务仓库内部以轻量包（如 `internal/fault`）自行定义，不再由 `utils-pkg` 承载。
 
 ---
 
