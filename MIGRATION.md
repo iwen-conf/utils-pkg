@@ -1,6 +1,6 @@
-# v0.5.0 升级与 API 迁移指南
+# v0.6.0 升级与 API 迁移指南
 
-本文档汇总 `utils-pkg` 从 `v0.3.0` 升级到 `v0.5.0` 的兼容性影响、修改前后代码对比及迁移步骤。`v0.4.0` 已包含安全破坏性变更；`v0.5.0` 收敛 JWT 生命周期 API，并补充 AES-GCM AAD 与泛型 `ptr` 辅助函数。
+本文档汇总 `utils-pkg` 从 `v0.3.0` 升级到 `v0.6.0` 的兼容性影响、修改前后代码对比及迁移步骤。`v0.4.0` 已包含安全破坏性变更；`v0.5.0` 收敛 JWT 生命周期 API，并补充 AES-GCM AAD 与泛型 `ptr` 辅助函数；`v0.6.0` 移除 `errors` 包。
 
 ---
 
@@ -88,7 +88,7 @@ err = tm.RevokeSessionByID(ctx, newPair.SessionID)
 
 ## 三、Errors 模块移除
 
-- `github.com/iwen-conf/utils-pkg/errors`（包含 `RichError` 以及旧版 `errors.Error` / `Builder` / `Validator`）已于 `v0.5.1` 之后正式移除。
+- `github.com/iwen-conf/utils-pkg/errors`（包含 `RichError` 以及旧版 `errors.Error` / `Builder` / `Validator`）已于 `v0.6.0` 正式移除。
 - 通用错误链与错误判断请直接使用 Go 标准库 `errors`（`fmt.Errorf("%w", ...)`、`errors.Is`、`errors.As`）。
 - 业务状态码、面向客户端的安全文案等应用层错误契约建议在各业务仓库内部以轻量包（如 `internal/fault`）自行定义，不再由 `utils-pkg` 承载。
 

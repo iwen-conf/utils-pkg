@@ -4,9 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0]
+
 ### Removed
 
 - **Errors**: Removed `github.com/iwen-conf/utils-pkg/errors` (`RichError` and legacy `Error`/`Builder`/`Validator`). Application-specific error codes and client-safe messages should live in each service's internal package; all remaining `utils-pkg` modules use standard library `errors` (`%w`, `errors.Is`, `errors.As`).
+- `Version()` is `v0.6.0`.
 
 ## [0.5.1]
 
