@@ -1,6 +1,7 @@
 package jwt
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 const (
 	// MaxTokenLength 限制单个 JWT 字符串最大字节长度，防止超大输入导致哈希/解析/内存放大。
 	MaxTokenLength = 8192
+	minKeyBytes    = 32
 )
 
 // TokenType 定义令牌用途类型。
@@ -59,10 +61,8 @@ func DefaultTokenOptions() *TokenOptions {
 	}
 }
 
-// JWTOptions 配置 TokenManager。
+// JWTOptions 配置 TokenManager（构造后不可变）。
 type JWTOptions struct {
-	// EnableLog 是否启用调试日志。
-	EnableLog bool
 	// BlacklistCleanInterval 默认内存存储和验证缓存的后台清理周期；0 表示禁用后台协程。
 	BlacklistCleanInterval time.Duration
 	// EnableCache 是否启用有效令牌解析缓存。
@@ -83,6 +83,12 @@ type JWTOptions struct {
 	ExpectedIssuer string
 	// ExpectedAudience 验证时要求的受众；为空表示不校验 aud。
 	ExpectedAudience []string
+	// SigningKeyID 可选；非空时签发令牌会在 JWT Header 写入 kid，并要求验签严格匹配 kid。
+	SigningKeyID string
+	// VerificationKeys 可选的多密钥验签映射（kid -> HS256 密钥，每把至少 32 字节），用于密钥轮换平滑过渡。
+	VerificationKeys map[string][]byte
+	// LegacyVerificationKey 可选的旧版无 kid 令牌兜底验签密钥（非空时至少 32 字节），仅在 SigningKeyID 非空时生效。
+	LegacyVerificationKey []byte
 	// TokenProfile 定义业务 Identity 映射到 CustomClaims 的字段名。
 	TokenProfile *TokenProfile
 	// RefreshTokenReuseAction 检测到 refresh token 重放时的处理策略。
@@ -91,7 +97,7 @@ type JWTOptions struct {
 	RevocationStore RevocationStore
 	// RefreshTokenUseStore 原子消费 refresh jti；为空时使用单进程内存实现。
 	RefreshTokenUseStore RefreshTokenUseStore
-	// ErrorReporter 接收后台清理与已弃用无错误接口的存储错误；为空时使用默认记录器。
+	// ErrorReporter 接收后台清理错误；为空时不输出日志。
 	ErrorReporter func(error)
 	// Clock 可选时间源，用于测试或自定义时钟；为空时使用 time.Now。
 	Clock func() time.Time
@@ -100,7 +106,6 @@ type JWTOptions struct {
 // DefaultJWTOptions 返回推荐的默认配置。
 func DefaultJWTOptions() *JWTOptions {
 	return &JWTOptions{
-		EnableLog:               false,
 		BlacklistCleanInterval:  10 * time.Minute,
 		EnableCache:             true,
 		CacheSize:               1000,
@@ -141,6 +146,44 @@ func validateJWTOptions(opts *JWTOptions) error {
 	return nil
 }
 
+func buildKeyRing(secretKey []byte, opts *JWTOptions) (string, map[string][]byte, []byte, error) {
+	signingKeyID := strings.TrimSpace(opts.SigningKeyID)
+	if opts.SigningKeyID != "" && signingKeyID == "" {
+		return "", nil, nil, ErrInvalidKeyID
+	}
+
+	var verificationKeys map[string][]byte
+	if len(opts.VerificationKeys) > 0 {
+		verificationKeys = make(map[string][]byte, len(opts.VerificationKeys))
+		for rawKID, key := range opts.VerificationKeys {
+			kid := strings.TrimSpace(rawKID)
+			if kid == "" {
+				return "", nil, nil, ErrInvalidKeyID
+			}
+			if len(key) < minKeyBytes {
+				return "", nil, nil, fmt.Errorf("%w: verification key %q got %d bytes", ErrSecretKeyTooShort, kid, len(key))
+			}
+			if _, exists := verificationKeys[kid]; exists {
+				return "", nil, nil, fmt.Errorf("%w: %q", ErrDuplicateKeyID, kid)
+			}
+			if signingKeyID != "" && kid == signingKeyID && !bytes.Equal(key, secretKey) {
+				return "", nil, nil, fmt.Errorf("%w: %q conflicts with signing secret", ErrDuplicateKeyID, kid)
+			}
+			verificationKeys[kid] = bytes.Clone(key)
+		}
+	}
+
+	var legacyKey []byte
+	if len(opts.LegacyVerificationKey) > 0 {
+		if len(opts.LegacyVerificationKey) < minKeyBytes {
+			return "", nil, nil, fmt.Errorf("%w: legacy verification key got %d bytes", ErrSecretKeyTooShort, len(opts.LegacyVerificationKey))
+		}
+		legacyKey = bytes.Clone(opts.LegacyVerificationKey)
+	}
+
+	return signingKeyID, verificationKeys, legacyKey, nil
+}
+
 func validateTokenProfile(p TokenProfile) error {
 	keys := []struct {
 		field string
@@ -166,19 +209,4 @@ func validateTokenProfile(p TokenProfile) error {
 		seen[item.claim] = item.field
 	}
 	return nil
-}
-
-type managerSnapshot struct {
-	enableCache             bool
-	enableLog               bool
-	cacheSize               int
-	cacheTTL                time.Duration
-	accessTokenExpiry       time.Duration
-	refreshTokenExpiry      time.Duration
-	issuer                  string
-	audience                []string
-	expectedIssuer          string
-	expectedAudience        []string
-	refreshTokenReuseAction RefreshTokenReuseAction
-	errorReporter           func(error)
 }

@@ -1,6 +1,7 @@
 package jwt
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"sync"
@@ -54,9 +55,10 @@ func TestCloneStandardClaims_IsolatesMutation(t *testing.T) {
 	}
 }
 
-func TestValidateToken_ReturnedClaimsMutationDoesNotAffectCache(t *testing.T) {
+func TestValidateAccessToken_ReturnedClaimsMutationDoesNotAffectCache(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
+	ctx := context.Background()
 
 	token, err := tm.GenerateToken("u-1", &TokenOptions{
 		SessionID: "sid-1",
@@ -71,9 +73,9 @@ func TestValidateToken_ReturnedClaimsMutationDoesNotAffectCache(t *testing.T) {
 		t.Fatalf("GenerateToken: %v", err)
 	}
 
-	first, err := tm.ValidateToken(token)
+	first, err := tm.ValidateAccessToken(ctx, token)
 	if err != nil {
-		t.Fatalf("first ValidateToken: %v", err)
+		t.Fatalf("first ValidateAccessToken: %v", err)
 	}
 	first.Subject = "mutated"
 	first.TokenID = "mutated-jti"
@@ -84,9 +86,9 @@ func TestValidateToken_ReturnedClaimsMutationDoesNotAffectCache(t *testing.T) {
 	first.CustomClaims["meta"].(map[string]interface{})["k"] = "x"
 	first.CustomClaims["tags"].([]interface{})[0] = "z"
 
-	second, err := tm.ValidateToken(token)
+	second, err := tm.ValidateAccessToken(ctx, token)
 	if err != nil {
-		t.Fatalf("second ValidateToken: %v", err)
+		t.Fatalf("second ValidateAccessToken: %v", err)
 	}
 	if second.Subject != "u-1" || second.CustomClaims["role"] != "admin" {
 		t.Fatalf("second validation saw mutated claims: subject=%s role=%v", second.Subject, second.CustomClaims["role"])
@@ -103,18 +105,19 @@ func TestValidateToken_ReturnedClaimsMutationDoesNotAffectCache(t *testing.T) {
 
 	second.Subject = "again"
 	second.CustomClaims["role"] = "guest"
-	third, err := tm.ValidateToken(token)
+	third, err := tm.ValidateAccessToken(ctx, token)
 	if err != nil {
-		t.Fatalf("third ValidateToken: %v", err)
+		t.Fatalf("third ValidateAccessToken: %v", err)
 	}
 	if third.Subject != "u-1" || third.CustomClaims["role"] != "admin" {
 		t.Fatalf("third validation saw mutated claims")
 	}
 }
 
-func TestValidateToken_ConcurrentMutationHasNoRace(t *testing.T) {
+func TestValidateAccessToken_ConcurrentMutationHasNoRace(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
+	ctx := context.Background()
 
 	token, err := tm.GenerateToken("u-1", &TokenOptions{
 		Audience: []string{"svc"},
@@ -126,8 +129,8 @@ func TestValidateToken_ConcurrentMutationHasNoRace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
-	if _, err := tm.ValidateToken(token); err != nil {
-		t.Fatalf("seed ValidateToken: %v", err)
+	if _, err := tm.ValidateAccessToken(ctx, token); err != nil {
+		t.Fatalf("seed ValidateAccessToken: %v", err)
 	}
 
 	var wg sync.WaitGroup
@@ -135,9 +138,9 @@ func TestValidateToken_ConcurrentMutationHasNoRace(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			claims, err := tm.ValidateToken(token)
+			claims, err := tm.ValidateAccessToken(ctx, token)
 			if err != nil {
-				t.Errorf("ValidateToken: %v", err)
+				t.Errorf("ValidateAccessToken: %v", err)
 				return
 			}
 			claims.Subject = "mut"
@@ -148,9 +151,9 @@ func TestValidateToken_ConcurrentMutationHasNoRace(t *testing.T) {
 	}
 	wg.Wait()
 
-	final, err := tm.ValidateToken(token)
+	final, err := tm.ValidateAccessToken(ctx, token)
 	if err != nil {
-		t.Fatalf("final ValidateToken: %v", err)
+		t.Fatalf("final ValidateAccessToken: %v", err)
 	}
 	if final.Subject != "u-1" || final.Audience[0] != "svc" || final.CustomClaims["role"] != "admin" {
 		t.Fatalf("concurrent mutation leaked into cache: %+v", final)
@@ -174,16 +177,17 @@ func TestCheckCache_CloneFailureReturnsErrorAndHit(t *testing.T) {
 	defer tm.Shutdown()
 
 	now := tm.now()
+	k := cacheKey("bad")
 	tm.cache.mu.Lock()
 	el := tm.cache.order.PushFront(&cachedClaimsEntry{
-		key: "bad",
+		key: k,
 		claims: &StandardClaims{
 			CustomClaims: map[string]interface{}{"bad": make(chan int)},
 		},
 		createdAt:  now,
 		validUntil: now.Add(time.Minute),
 	})
-	tm.cache.items["bad"] = el
+	tm.cache.items[k] = el
 	tm.cache.mu.Unlock()
 
 	claims, err, found := tm.cache.get("bad", now)

@@ -1,6 +1,7 @@
 package jwt
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -99,30 +100,14 @@ func TestMustNewTokenManager_Panics(t *testing.T) {
 	_ = MustNewTokenManager("short")
 }
 
-func TestTokenManager_SettersAndHelpers(t *testing.T) {
+func TestTokenManager_FormatValidationAndCacheInitialState(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
 
-	tm.EnableCache(false)
-	if tm.enableCache {
-		t.Fatalf("Expected enableCache=false")
-	}
-	if err := tm.SetCacheSize(7); err != nil {
-		t.Fatalf("SetCacheSize: %v", err)
-	}
-	if tm.cacheSize != 7 {
-		t.Fatalf("Expected cacheSize=7, got %d", tm.cacheSize)
-	}
-	if err := tm.SetCacheTTL(2 * time.Second); err != nil {
-		t.Fatalf("SetCacheTTL: %v", err)
-	}
-	if tm.cacheTTL != 2*time.Second {
-		t.Fatalf("Expected cacheTTL=2s, got %v", tm.cacheTTL)
-	}
 	if tm.GetCacheSize() != 0 {
 		t.Fatalf("Expected cache size 0")
 	}
-	if tm.isTokenFormatValid("short") || tm.isTokenFormatValid("a..bbbbbbbbb") || tm.isTokenFormatValid(".aaaa.bbbbbb") || tm.isTokenFormatValid("aaaa.bbbbbb.") {
+	if isTokenFormatValid("short") || isTokenFormatValid("a..bbbbbbbbb") || isTokenFormatValid(".aaaa.bbbbbb") || isTokenFormatValid("aaaa.bbbbbb.") {
 		t.Fatalf("Expected invalid token formats to be rejected")
 	}
 }
@@ -130,7 +115,6 @@ func TestTokenManager_SettersAndHelpers(t *testing.T) {
 func TestTokenManager_GenerateToken_ErrorOnUnmarshalableCustomClaims(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
-	tm.EnableLog(true)
 
 	_, err := tm.GenerateToken("u-1", &TokenOptions{
 		CustomClaims: map[string]interface{}{
@@ -142,17 +126,7 @@ func TestTokenManager_GenerateToken_ErrorOnUnmarshalableCustomClaims(t *testing.
 	}
 }
 
-func TestTokenManager_GenerateToken_LogOnSuccess(t *testing.T) {
-	tm := MustNewTokenManager(testSecretKey)
-	defer tm.Shutdown()
-	tm.EnableLog(true)
-
-	if _, err := tm.GenerateToken("u-1"); err != nil {
-		t.Fatalf("GenerateToken error: %v", err)
-	}
-}
-
-func TestTokenManager_ValidateToken_UnexpectedSigningMethod(t *testing.T) {
+func TestTokenManager_ValidateAccessToken_UnexpectedSigningMethod(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
 	token := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{"sub": "u-1"})
@@ -160,12 +134,12 @@ func TestTokenManager_ValidateToken_UnexpectedSigningMethod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SignedString error: %v", err)
 	}
-	if _, err := tm.ValidateToken(tokenStr); err == nil {
-		t.Fatalf("Expected ValidateToken error")
+	if _, err := tm.ValidateAccessToken(context.Background(), tokenStr); err == nil {
+		t.Fatalf("Expected ValidateAccessToken error")
 	}
 }
 
-func TestTokenManager_ValidateToken_InvalidTokenNoError(t *testing.T) {
+func TestTokenManager_ValidateAccessToken_InvalidTokenNoError(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
 
@@ -176,24 +150,25 @@ func TestTokenManager_ValidateToken_InvalidTokenNoError(t *testing.T) {
 		return &jwt.Token{Valid: false, Claims: jwt.MapClaims{}}, nil
 	}
 
-	_, err := tm.ValidateToken("aaaaaaaaaa.bbbbbbbbbb.cccccccccc")
+	_, err := tm.ValidateAccessToken(context.Background(), "aaaaaaaaaa.bbbbbbbbbb.cccccccccc")
 	if !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("Expected ErrInvalidToken, got %v", err)
 	}
 }
 
-func TestTokenManager_RefreshToken_InvalidInput(t *testing.T) {
+func TestTokenManager_RefreshTokenPair_InvalidInput(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
-	_, _, err := tm.RefreshToken("invalid")
+	_, err := tm.RefreshTokenPair(context.Background(), "invalid")
 	if err == nil {
-		t.Fatalf("Expected RefreshToken error")
+		t.Fatalf("Expected RefreshTokenPair error")
 	}
 }
 
-func TestTokenManager_RefreshToken_GenerateTokenFailureDoesNotConsumeJTI(t *testing.T) {
+func TestTokenManager_RefreshTokenPair_GenerateTokenFailureDoesNotConsumeJTI(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
+	ctx := context.Background()
 
 	rawClaims := jwt.MapClaims{
 		"sub":  "   ",
@@ -208,10 +183,10 @@ func TestTokenManager_RefreshToken_GenerateTokenFailureDoesNotConsumeJTI(t *test
 		t.Fatalf("SignedString error: %v", err)
 	}
 
-	if _, _, err = tm.RefreshToken(tokenStr); err == nil {
-		t.Fatalf("Expected RefreshToken error for empty subject")
+	if _, err = tm.RefreshTokenPair(ctx, tokenStr); err == nil {
+		t.Fatalf("Expected RefreshTokenPair error for empty subject")
 	}
-	consumed, err := tm.refreshStore.IsConsumed(nil, "id-empty-sub")
+	consumed, err := tm.refreshStore.IsConsumed(ctx, "id-empty-sub")
 	if err != nil || consumed {
 		t.Fatalf("failed pre-generation must not consume jti: consumed=%v err=%v", consumed, err)
 	}
@@ -265,18 +240,19 @@ func TestValidationCache_LRUAndExpiry(t *testing.T) {
 func TestTokenManager_RevokeToken_EmptyAndInvalid(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
-	if !errors.Is(tm.RevokeToken(""), ErrEmptyToken) {
+	ctx := context.Background()
+	if !errors.Is(tm.RevokeToken(ctx, ""), ErrEmptyToken) {
 		t.Fatalf("Expected ErrEmptyToken")
 	}
-	if !errors.Is(tm.RevokeToken("invalid"), ErrInvalidTokenFormat) {
+	if !errors.Is(tm.RevokeToken(ctx, "invalid"), ErrInvalidTokenFormat) {
 		t.Fatalf("Expected ErrInvalidTokenFormat")
 	}
 }
 
 func TestTokenManager_RevokeToken_NoExpUsesDefaultExpire(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
-	defer tm.Shutdown()
-	tm.EnableLog(true)
+	defer managerShutdown(tm)
+	ctx := context.Background()
 
 	rawClaims := jwt.MapClaims{
 		"sub":  "u-1",
@@ -291,7 +267,7 @@ func TestTokenManager_RevokeToken_NoExpUsesDefaultExpire(t *testing.T) {
 	}
 
 	before := time.Now()
-	if err := tm.RevokeToken(tokenStr); err != nil {
+	if err := tm.RevokeToken(ctx, tokenStr); err != nil {
 		t.Fatalf("RevokeToken error: %v", err)
 	}
 
@@ -307,20 +283,25 @@ func TestTokenManager_RevokeToken_NoExpUsesDefaultExpire(t *testing.T) {
 	}
 }
 
+func managerShutdown(tm *TokenManager) {
+	tm.Shutdown()
+}
+
 func TestTokenManager_RevokeToken_RemovesCacheEntry(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
+	ctx := context.Background()
 	tokenStr, err := tm.GenerateToken("u-1")
 	if err != nil {
 		t.Fatalf("GenerateToken error: %v", err)
 	}
-	if _, err := tm.ValidateToken(tokenStr); err != nil {
-		t.Fatalf("ValidateToken error: %v", err)
+	if _, err := tm.ValidateAccessToken(ctx, tokenStr); err != nil {
+		t.Fatalf("ValidateAccessToken error: %v", err)
 	}
 	if tm.GetCacheSize() != 1 {
 		t.Fatalf("Expected token cached")
 	}
-	if err := tm.RevokeToken(tokenStr); err != nil {
+	if err := tm.RevokeToken(ctx, tokenStr); err != nil {
 		t.Fatalf("RevokeToken error: %v", err)
 	}
 	if tm.GetCacheSize() != 0 {
@@ -328,10 +309,10 @@ func TestTokenManager_RevokeToken_RemovesCacheEntry(t *testing.T) {
 	}
 }
 
-func TestTokenManager_IsBlacklisted_ExpiredAndActive(t *testing.T) {
+func TestTokenManager_IsTokenRevoked_ExpiredAndActive(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
-	tm.EnableLog(true)
+	ctx := context.Background()
 
 	expiredTok := "aaaaaaaaaa.bbbbbbbbbb.cccccccccc"
 	activeTok := "bbbbbbbbbb.cccccccccc.dddddddddd"
@@ -341,18 +322,18 @@ func TestTokenManager_IsBlacklisted_ExpiredAndActive(t *testing.T) {
 	store.entries[tokenRevocationKey(activeTok)] = time.Now().Add(time.Hour)
 	store.mu.Unlock()
 
-	if tm.IsBlacklisted(expiredTok) {
-		t.Fatalf("Expected expired token not blacklisted")
+	if revoked, err := tm.IsTokenRevoked(ctx, expiredTok); err != nil || revoked {
+		t.Fatalf("Expected expired token not revoked, revoked=%v err=%v", revoked, err)
 	}
-	if !tm.IsBlacklisted(activeTok) {
-		t.Fatalf("Expected active token blacklisted")
+	if revoked, err := tm.IsTokenRevoked(ctx, activeTok); err != nil || !revoked {
+		t.Fatalf("Expected active token revoked, revoked=%v err=%v", revoked, err)
 	}
 }
 
-func TestTokenManager_CleanBlacklist_LogsAndCleans(t *testing.T) {
+func TestTokenManager_CleanBlacklist_Cleans(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
-	tm.EnableLog(true)
+	ctx := context.Background()
 	tokenStr := "cccccccccc.dddddddddd.eeeeeeeeee"
 
 	store := tm.revocations.(*MemoryRevocationStore)
@@ -360,7 +341,9 @@ func TestTokenManager_CleanBlacklist_LogsAndCleans(t *testing.T) {
 	store.entries[tokenRevocationKey(tokenStr)] = time.Now().Add(-time.Second)
 	store.mu.Unlock()
 
-	tm.CleanBlacklist()
+	if _, err := tm.CleanBlacklist(ctx); err != nil {
+		t.Fatalf("CleanBlacklist: %v", err)
+	}
 
 	store.mu.RLock()
 	_, ok := store.entries[tokenRevocationKey(tokenStr)]
@@ -377,7 +360,7 @@ func TestTokenManager_startCleanupRoutine_TickAndStop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTokenManager error: %v", err)
 	}
-	tm.EnableLog(true)
+	ctx := context.Background()
 
 	now := tm.now()
 	_ = tm.cache.put("old.tok.sig", &StandardClaims{
@@ -393,13 +376,15 @@ func TestTokenManager_startCleanupRoutine_TickAndStop(t *testing.T) {
 
 	deadline := time.Now().Add(250 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if tm.GetCacheSize() == 0 && tm.GetBlacklistSize() == 0 {
+		size, _ := tm.GetBlacklistSize(ctx)
+		if tm.GetCacheSize() == 0 && size == 0 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if tm.GetCacheSize() != 0 || tm.GetBlacklistSize() != 0 {
-		t.Fatalf("Expected cache and blacklist cleaned, cache=%d blacklist=%d", tm.GetCacheSize(), tm.GetBlacklistSize())
+	size, _ := tm.GetBlacklistSize(ctx)
+	if tm.GetCacheSize() != 0 || size != 0 {
+		t.Fatalf("Expected cache and blacklist cleaned, cache=%d blacklist=%d", tm.GetCacheSize(), size)
 	}
 	tm.Shutdown()
 }

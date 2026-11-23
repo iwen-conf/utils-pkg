@@ -1,6 +1,7 @@
 package jwt
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -23,7 +24,7 @@ func TestNewTokenManager_SecretLength(t *testing.T) {
 	tm.Shutdown()
 }
 
-func TestValidateToken_RejectsHS384(t *testing.T) {
+func TestValidateAccessToken_RejectsHS384(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
 
@@ -35,12 +36,12 @@ func TestValidateToken_RejectsHS384(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SignedString: %v", err)
 	}
-	if _, err := tm.ValidateToken(tokenStr); err == nil {
+	if _, err := tm.ValidateAccessToken(context.Background(), tokenStr); err == nil {
 		t.Fatalf("HS384 token must be rejected")
 	}
 }
 
-func TestValidateToken_RequiresExpiration(t *testing.T) {
+func TestValidateAccessToken_RequiresExpiration(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
 
@@ -52,7 +53,7 @@ func TestValidateToken_RequiresExpiration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SignedString: %v", err)
 	}
-	if _, err := tm.ValidateToken(tokenStr); err == nil {
+	if _, err := tm.ValidateAccessToken(context.Background(), tokenStr); err == nil {
 		t.Fatalf("token without exp must fail")
 	}
 }
@@ -75,7 +76,7 @@ func TestStandardClaims_MalformedRegisteredClaims(t *testing.T) {
 	}
 }
 
-func TestValidateToken_ExpectedIssuerAudience(t *testing.T) {
+func TestValidateAccessToken_ExpectedIssuerAudience(t *testing.T) {
 	opts := DefaultJWTOptions()
 	opts.Issuer = "issuer-default"
 	opts.Audience = []string{"aud-default"}
@@ -83,6 +84,7 @@ func TestValidateToken_ExpectedIssuerAudience(t *testing.T) {
 	opts.ExpectedAudience = []string{"aud-expected"}
 	tm := MustNewTokenManager(testSecretKey, opts)
 	defer tm.Shutdown()
+	ctx := context.Background()
 
 	okToken, err := tm.GenerateToken("u-1", &TokenOptions{
 		Issuer:   "issuer-expected",
@@ -91,7 +93,7 @@ func TestValidateToken_ExpectedIssuerAudience(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateToken expected: %v", err)
 	}
-	if _, err := tm.ValidateToken(okToken); err != nil {
+	if _, err := tm.ValidateAccessToken(ctx, okToken); err != nil {
 		t.Fatalf("matching expected issuer/audience should pass: %v", err)
 	}
 
@@ -99,12 +101,12 @@ func TestValidateToken_ExpectedIssuerAudience(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateToken default issuer: %v", err)
 	}
-	if _, err := tm.ValidateToken(mismatch); err == nil {
+	if _, err := tm.ValidateAccessToken(ctx, mismatch); err == nil {
 		t.Fatalf("default issued token must fail expected issuer/audience")
 	}
 }
 
-func TestValidateToken_IssuerIsIssueDefaultOnly(t *testing.T) {
+func TestValidateAccessToken_IssuerIsIssueDefaultOnly(t *testing.T) {
 	opts := DefaultJWTOptions()
 	opts.Issuer = "issuer-default"
 	opts.Audience = []string{"aud-default"}
@@ -115,7 +117,7 @@ func TestValidateToken_IssuerIsIssueDefaultOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
-	if _, err := tm.ValidateToken(other); err != nil {
+	if _, err := tm.ValidateAccessToken(context.Background(), other); err != nil {
 		t.Fatalf("without Expected* issue defaults must not reject custom iss/aud: %v", err)
 	}
 }

@@ -1,6 +1,7 @@
 package useragent
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -16,17 +17,17 @@ func TestRepro_IEVersionExtractionAndNilShardedCache(t *testing.T) {
 		t.Fatalf("BUG: IE 11 parsed as %+v", ie11)
 	}
 
-	var sc *ShardedCache
-	if _, ok := sc.Get("k"); ok {
-		t.Fatalf("nil ShardedCache.Get should return false")
+	var sc *shardedBrowserCache
+	if _, ok := sc.get("k"); ok {
+		t.Fatalf("nil shardedBrowserCache.get should return false")
 	}
-	if err := sc.Put("k", 1); err == nil {
-		t.Fatalf("nil ShardedCache.Put should return error")
+	if err := sc.put("k", BrowserInfo{}); !errors.Is(err, errUninitializedCache) {
+		t.Fatalf("nil shardedBrowserCache.put should return errUninitializedCache, got %v", err)
 	}
 
 	hugeUA := "Mozilla/5.0 Chrome/120.0.0.0 " + strings.Repeat("X", 64*1024)
 	_ = GetBrowserInfo(hugeUA)
-	if _, cached := browserInfoCache.Get(hugeUA); cached {
+	if _, cached := getBrowserInfoCache().get(hugeUA); cached {
 		t.Fatalf("SECURITY BUG: 64KB User-Agent was stored raw in global cache")
 	}
 }

@@ -1,10 +1,7 @@
-package url
+package signedurl
 
 import (
-	"encoding/json"
 	"errors"
-	"net/url"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -147,86 +144,6 @@ func TestValidateSignature(t *testing.T) {
 	}
 }
 
-func TestParseURL(t *testing.T) {
-	testURL := "https://example.com/path?key1=value1&key2=value2#fragment"
-	result, err := ParseURL(testURL)
-	if err != nil {
-		t.Fatalf("ParseURL failed: %v", err)
-	}
-
-	expected := map[string]interface{}{
-		"scheme":   "https",
-		"host":     "example.com",
-		"path":     "/path",
-		"fragment": "fragment",
-		"query": map[string]interface{}{
-			"key1": "value1",
-			"key2": "value2",
-		},
-	}
-
-	if !reflect.DeepEqual(result, expected) {
-		t.Errorf("Expected %v, got %v", expected, result)
-	}
-}
-
-func TestSerializeParams(t *testing.T) {
-	params := map[string]interface{}{
-		"string":      "value",
-		"stringSlice": []string{"value1", "value2"},
-		"object":      map[string]string{"key": "value"},
-	}
-
-	result := SerializeParams(params)
-
-	// 验证字符串参数
-	if !contains(result, "string=value") {
-		t.Error("Missing string parameter")
-	}
-
-	// 验证字符串切片参数
-	if !contains(result, "stringSlice=value1") || !contains(result, "stringSlice=value2") {
-		t.Error("Missing string slice parameters")
-	}
-
-	// 验证对象参数（JSON 序列化）
-	objectJSON, _ := json.Marshal(map[string]string{"key": "value"})
-	expectedObject := "object=" + url.QueryEscape(string(objectJSON))
-	if !contains(result, expectedObject) {
-		t.Error("Missing or incorrect object parameter")
-	}
-}
-
-func TestDeserializeParams(t *testing.T) {
-	queryString := "key1=value1&key2=value2&array=item1&array=item2"
-	result, err := DeserializeParams(queryString)
-	if err != nil {
-		t.Fatalf("DeserializeParams failed: %v", err)
-	}
-
-	// 测试单值参数
-	if result["key1"] != "value1" || result["key2"] != "value2" {
-		t.Error("Single value parameters not deserialized correctly")
-	}
-
-	// 测试多值参数
-	array, ok := result["array"].([]string)
-	if !ok {
-		t.Error("Array parameter not deserialized to string slice")
-	} else if len(array) != 2 || array[0] != "item1" || array[1] != "item2" {
-		t.Error("Array parameter values not deserialized correctly")
-	}
-
-	// 测试空查询字符串
-	emptyResult, err := DeserializeParams("")
-	if err != nil {
-		t.Fatalf("DeserializeParams failed for empty string: %v", err)
-	}
-	if len(emptyResult) != 0 {
-		t.Error("Empty query string should return empty map")
-	}
-}
-
 // 辅助函数
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
@@ -258,43 +175,6 @@ func BenchmarkValidateSignature(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := ValidateSignature(url, testURLSecret, 3600)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkParseURL(b *testing.B) {
-	testURL := "https://example.com/path?key1=value1&key2=value2#fragment"
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := ParseURL(testURL)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkSerializeParams(b *testing.B) {
-	params := map[string]interface{}{
-		"string":      "value",
-		"stringSlice": []string{"value1", "value2"},
-		"object":      map[string]string{"key": "value"},
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		SerializeParams(params)
-	}
-}
-
-func BenchmarkDeserializeParams(b *testing.B) {
-	queryString := "key1=value1&key2=value2&array=item1&array=item2"
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := DeserializeParams(queryString)
 		if err != nil {
 			b.Fatal(err)
 		}

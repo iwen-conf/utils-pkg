@@ -1,22 +1,25 @@
 package jwt
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestTokenManager_GenerateIdentityTokenPair(t *testing.T) {
+func TestTokenManager_IssueTokenPair(t *testing.T) {
 	manager := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
+	defer manager.Shutdown()
+	ctx := context.Background()
 
-	pair, err := manager.GenerateIdentityTokenPair(Identity{
+	pair, err := manager.IssueTokenPair(Identity{
 		Subject:   "user-1",
 		ActorType: "write",
 		Roles:     []string{"author"},
 		Scopes:    []string{"books:write"},
 	})
 	if err != nil {
-		t.Fatalf("GenerateIdentityTokenPair error: %v", err)
+		t.Fatalf("IssueTokenPair error: %v", err)
 	}
 	if pair.AccessToken == "" || pair.RefreshToken == "" {
 		t.Fatalf("expected both tokens, got %+v", pair)
@@ -25,9 +28,9 @@ func TestTokenManager_GenerateIdentityTokenPair(t *testing.T) {
 		t.Fatal("expected auto-generated session id")
 	}
 
-	accessClaims, err := manager.ValidateToken(pair.AccessToken)
+	accessClaims, err := manager.ValidateAccessToken(ctx, pair.AccessToken)
 	if err != nil {
-		t.Fatalf("ValidateToken access error: %v", err)
+		t.Fatalf("ValidateAccessToken error: %v", err)
 	}
 	if accessClaims.Subject != "user-1" || accessClaims.SessionID != pair.SessionID {
 		t.Fatalf("unexpected access claims: %+v", accessClaims)
@@ -46,10 +49,10 @@ func TestTokenManager_GenerateIdentityTokenPair(t *testing.T) {
 		t.Fatalf("unexpected roles: %q", got)
 	}
 
-	if _, err := manager.ValidateToken(pair.RefreshToken); err == nil {
-		t.Fatal("ValidateToken must reject refresh token")
+	if _, err := manager.ValidateAccessToken(ctx, pair.RefreshToken); err == nil {
+		t.Fatal("ValidateAccessToken must reject refresh token")
 	}
-	refreshClaims, err := manager.ValidateRefreshToken(nil, pair.RefreshToken)
+	refreshClaims, err := manager.ValidateRefreshToken(ctx, pair.RefreshToken)
 	if err != nil {
 		t.Fatalf("ValidateRefreshToken error: %v", err)
 	}
@@ -61,7 +64,7 @@ func TestTokenManager_GenerateIdentityTokenPair(t *testing.T) {
 	}
 }
 
-func TestTokenManager_GenerateIdentityTokenPair_CustomProfile(t *testing.T) {
+func TestTokenManager_IssueTokenPair_CustomProfile(t *testing.T) {
 	options := DefaultJWTOptions()
 	options.TokenProfile = &TokenProfile{
 		ActorTypeClaim: "kind",
@@ -71,8 +74,9 @@ func TestTokenManager_GenerateIdentityTokenPair_CustomProfile(t *testing.T) {
 		ScopesClaim:    "permissions",
 	}
 	manager := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!", options)
+	defer manager.Shutdown()
 
-	pair, err := manager.GenerateIdentityTokenPair(Identity{
+	pair, err := manager.IssueTokenPair(Identity{
 		Subject:   "admin-1",
 		ActorType: "admin",
 		ActorID:   "admin-account-1",
@@ -80,12 +84,12 @@ func TestTokenManager_GenerateIdentityTokenPair_CustomProfile(t *testing.T) {
 		Roles:     []string{"system_admin"},
 	})
 	if err != nil {
-		t.Fatalf("GenerateIdentityTokenPair error: %v", err)
+		t.Fatalf("IssueTokenPair error: %v", err)
 	}
 
-	claims, err := manager.ValidateToken(pair.AccessToken)
+	claims, err := manager.ValidateAccessToken(context.Background(), pair.AccessToken)
 	if err != nil {
-		t.Fatalf("ValidateToken error: %v", err)
+		t.Fatalf("ValidateAccessToken error: %v", err)
 	}
 	identity := claims.Identity(options.TokenProfile)
 	if identity.ActorType != "admin" || identity.ActorID != "admin-account-1" || identity.TenantID != "tenant-1" {
@@ -96,10 +100,11 @@ func TestTokenManager_GenerateIdentityTokenPair_CustomProfile(t *testing.T) {
 	}
 }
 
-func TestTokenManager_GenerateIdentityTokenPair_RejectsClaimConflict(t *testing.T) {
+func TestTokenManager_IssueTokenPair_RejectsClaimConflict(t *testing.T) {
 	manager := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
+	defer manager.Shutdown()
 
-	_, err := manager.GenerateIdentityTokenPair(Identity{
+	_, err := manager.IssueTokenPair(Identity{
 		Subject:   "user-1",
 		ActorType: "user",
 		CustomClaims: map[string]interface{}{
@@ -111,32 +116,34 @@ func TestTokenManager_GenerateIdentityTokenPair_RejectsClaimConflict(t *testing.
 	}
 }
 
-func TestTokenManager_RefreshToken_PreservesCustomClaims(t *testing.T) {
+func TestTokenManager_RefreshTokenPair_PreservesCustomClaims(t *testing.T) {
 	manager := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
+	defer manager.Shutdown()
+	ctx := context.Background()
 
-	pair, err := manager.GenerateIdentityTokenPair(Identity{
+	pair, err := manager.IssueTokenPair(Identity{
 		Subject:   "user-1",
 		ActorType: "user",
 		Scopes:    []string{"profile:read"},
 	})
 	if err != nil {
-		t.Fatalf("GenerateIdentityTokenPair error: %v", err)
+		t.Fatalf("IssueTokenPair error: %v", err)
 	}
 
-	newAccess, newRefresh, err := manager.RefreshToken(pair.RefreshToken)
+	rotated, err := manager.RefreshTokenPair(ctx, pair.RefreshToken)
 	if err != nil {
-		t.Fatalf("RefreshToken error: %v", err)
+		t.Fatalf("RefreshTokenPair error: %v", err)
 	}
 
-	accessClaims, err := manager.ValidateToken(newAccess)
+	accessClaims, err := manager.ValidateAccessToken(ctx, rotated.AccessToken)
 	if err != nil {
-		t.Fatalf("ValidateToken new access error: %v", err)
+		t.Fatalf("ValidateAccessToken new access error: %v", err)
 	}
 	if accessClaims.Identity().ActorType != "user" {
 		t.Fatalf("expected rotated access token to preserve identity claims, got %+v", accessClaims.CustomClaims)
 	}
 
-	refreshClaims, err := manager.ValidateRefreshToken(nil, newRefresh)
+	refreshClaims, err := manager.ValidateRefreshToken(ctx, rotated.RefreshToken)
 	if err != nil {
 		t.Fatalf("ValidateRefreshToken new refresh error: %v", err)
 	}
@@ -150,14 +157,15 @@ func TestTokenManager_GenerateToken_IssuerAudience(t *testing.T) {
 	options.Issuer = "utils-test"
 	options.Audience = []string{"admin", "write", "user"}
 	manager := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!", options)
+	defer manager.Shutdown()
 
 	token, err := manager.GenerateToken("user-1", &TokenOptions{ExpiresIn: time.Minute})
 	if err != nil {
 		t.Fatalf("GenerateToken error: %v", err)
 	}
-	claims, err := manager.ValidateToken(token)
+	claims, err := manager.ValidateAccessToken(context.Background(), token)
 	if err != nil {
-		t.Fatalf("ValidateToken error: %v", err)
+		t.Fatalf("ValidateAccessToken error: %v", err)
 	}
 	if claims.Issuer != "utils-test" {
 		t.Fatalf("expected issuer utils-test, got %q", claims.Issuer)
@@ -167,28 +175,31 @@ func TestTokenManager_GenerateToken_IssuerAudience(t *testing.T) {
 	}
 }
 
-func TestTokenManager_GenerateTokenPair_AccessCustomClaims(t *testing.T) {
+func TestTokenManager_IssueTokenPair_AccessCustomClaims(t *testing.T) {
 	manager := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
+	defer manager.Shutdown()
 
-	pair, err := manager.GenerateTokenPair("user-1", &TokenPairOptions{
+	pair, err := manager.IssueTokenPair(Identity{Subject: "user-1"}, &TokenPairOptions{
 		AccessOptions: &TokenOptions{
 			CustomClaims: map[string]interface{}{"entry": "admin"},
 		},
 	})
 	if err != nil {
-		t.Fatalf("GenerateTokenPair error: %v", err)
+		t.Fatalf("IssueTokenPair error: %v", err)
 	}
-	claims, err := manager.ValidateToken(pair.AccessToken)
+	claims, err := manager.ValidateAccessToken(context.Background(), pair.AccessToken)
 	if err != nil {
-		t.Fatalf("ValidateToken error: %v", err)
+		t.Fatalf("ValidateAccessToken error: %v", err)
 	}
 	if claims.CustomClaims["entry"] != "admin" {
 		t.Fatalf("expected access custom claim, got %+v", claims.CustomClaims)
 	}
 }
 
-func TestTokenManager_RefreshToken_PreservesIssuerAudience(t *testing.T) {
+func TestTokenManager_RefreshTokenPair_PreservesIssuerAudience(t *testing.T) {
 	manager := MustNewTokenManager("this-is-a-very-secure-jwt-secret-key-32bytes!")
+	defer manager.Shutdown()
+	ctx := context.Background()
 
 	refreshToken, err := manager.GenerateToken("user-1", &TokenOptions{
 		TokenType: RefreshToken,
@@ -200,13 +211,13 @@ func TestTokenManager_RefreshToken_PreservesIssuerAudience(t *testing.T) {
 		t.Fatalf("GenerateToken error: %v", err)
 	}
 
-	accessToken, _, err := manager.RefreshToken(refreshToken)
+	rotated, err := manager.RefreshTokenPair(ctx, refreshToken)
 	if err != nil {
-		t.Fatalf("RefreshToken error: %v", err)
+		t.Fatalf("RefreshTokenPair error: %v", err)
 	}
-	claims, err := manager.ValidateToken(accessToken)
+	claims, err := manager.ValidateAccessToken(ctx, rotated.AccessToken)
 	if err != nil {
-		t.Fatalf("ValidateToken error: %v", err)
+		t.Fatalf("ValidateAccessToken error: %v", err)
 	}
 	if claims.Issuer != "custom-issuer" {
 		t.Fatalf("expected issuer to be preserved, got %q", claims.Issuer)

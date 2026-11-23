@@ -76,17 +76,12 @@ type BcryptHasher struct {
 	cost BcryptCost
 }
 
-// NewBcryptHasherChecked 创建并校验成本参数的 bcrypt 哈希器（推荐）。
-func NewBcryptHasherChecked(cost BcryptCost) (*BcryptHasher, error) {
+// NewBcryptHasher 创建并校验成本参数的 bcrypt 哈希器。
+func NewBcryptHasher(cost BcryptCost) (*BcryptHasher, error) {
 	if err := validateBcryptCost(cost); err != nil {
 		return nil, err
 	}
 	return &BcryptHasher{cost: cost}, nil
-}
-
-// NewBcryptHasher 创建 bcrypt 哈希器（兼容保留；非法 cost 将在 Hash 时返回 ErrInvalidBcryptCost）。
-func NewBcryptHasher(cost BcryptCost) *BcryptHasher {
-	return &BcryptHasher{cost: cost}
 }
 
 // Hash 使用 bcrypt 哈希密码

@@ -1,6 +1,8 @@
 package pagination
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -253,5 +255,75 @@ func TestCursorResponseFields(t *testing.T) {
 	resp := CursorResponse{NextCursor: "x", PrevCursor: "y", HasMore: true}
 	if !resp.HasMore || resp.NextCursor != "x" || resp.PrevCursor != "y" {
 		t.Fatalf("unexpected response fields")
+	}
+}
+
+func TestGenericEncodeDecodeCursor(t *testing.T) {
+	p := testPayload{ID: 77, TS: 1700000123}
+
+	// nil codec
+	if _, err := EncodeCursor(nil, p); !errors.Is(err, ErrNilCodec) {
+		t.Fatalf("EncodeCursor(nil): %v", err)
+	}
+	if _, err := DecodeCursor[testPayload](nil, "abc"); !errors.Is(err, ErrNilCodec) {
+		t.Fatalf("DecodeCursor(nil): %v", err)
+	}
+
+	// Base64JSONCodec
+	base := Base64JSONCodec{}
+	token, err := EncodeCursor(base, p)
+	if err != nil {
+		t.Fatalf("EncodeCursor(base): %v", err)
+	}
+	got, err := DecodeCursor[testPayload](base, token)
+	if err != nil || got != p {
+		t.Fatalf("DecodeCursor(base) = (%+v, %v), want %+v", got, err, p)
+	}
+
+	// HMACCodec
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	hmacCodec, err := NewHMACCodec(key)
+	if err != nil {
+		t.Fatalf("NewHMACCodec: %v", err)
+	}
+	signed, err := EncodeCursor(hmacCodec, p)
+	if err != nil {
+		t.Fatalf("EncodeCursor(hmac): %v", err)
+	}
+	got, err = DecodeCursor[testPayload](hmacCodec, signed)
+	if err != nil || got != p {
+		t.Fatalf("DecodeCursor(hmac) = (%+v, %v), want %+v", got, err, p)
+	}
+	if _, err := DecodeCursor[testPayload](hmacCodec, "v1.onlytwo"); !errors.Is(err, ErrInvalidCursorFormat) {
+		t.Fatalf("expected ErrInvalidCursorFormat for 2 parts, got %v", err)
+	}
+	if _, err := DecodeCursor[testPayload](hmacCodec, "v1.a.b.c"); !errors.Is(err, ErrInvalidCursorFormat) {
+		t.Fatalf("expected ErrInvalidCursorFormat for 4 parts, got %v", err)
+	}
+}
+
+func TestBase64JSONCodec_ErrorChainPreserved(t *testing.T) {
+	c := Base64JSONCodec{}
+	var out testPayload
+
+	err := c.Decode("!!!invalid!!!", &out)
+	if !errors.Is(err, ErrInvalidCursorFormat) {
+		t.Fatalf("expected ErrInvalidCursorFormat, got %v", err)
+	}
+	var b64Err base64.CorruptInputError
+	if !errors.As(err, &b64Err) {
+		t.Fatalf("expected wrapped base64.CorruptInputError, got %v", err)
+	}
+
+	err = c.Decode("bm90anNvbg", &out)
+	if !errors.Is(err, ErrInvalidCursorFormat) {
+		t.Fatalf("expected ErrInvalidCursorFormat, got %v", err)
+	}
+	var jsonErr *json.SyntaxError
+	if !errors.As(err, &jsonErr) {
+		t.Fatalf("expected wrapped *json.SyntaxError, got %v", err)
 	}
 }

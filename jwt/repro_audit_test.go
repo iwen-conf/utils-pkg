@@ -10,11 +10,12 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// TestRepro_ValidateTokenRejectsRefreshToken verifies that a RefreshToken
+// TestRepro_ValidateAccessTokenRejectsRefreshToken verifies that a RefreshToken
 // cannot pass the general access-token validation entry point.
-func TestRepro_ValidateTokenRejectsRefreshToken(t *testing.T) {
+func TestRepro_ValidateAccessTokenRejectsRefreshToken(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
+	ctx := context.Background()
 
 	pair, err := tm.IssueTokenPair(Identity{
 		Subject:   "user-1",
@@ -24,10 +25,10 @@ func TestRepro_ValidateTokenRejectsRefreshToken(t *testing.T) {
 		t.Fatalf("IssueTokenPair: %v", err)
 	}
 
-	if _, err := tm.ValidateToken(pair.RefreshToken); !errors.Is(err, ErrTokenTypeMismatch) {
+	if _, err := tm.ValidateAccessToken(ctx, pair.RefreshToken); !errors.Is(err, ErrTokenTypeMismatch) {
 		t.Fatalf("expected ErrTokenTypeMismatch when validating RefreshToken as AccessToken, got %v", err)
 	}
-	if _, _, err := tm.Authenticate(context.Background(), pair.RefreshToken); !errors.Is(err, ErrTokenTypeMismatch) {
+	if _, _, err := tm.Authenticate(ctx, pair.RefreshToken); !errors.Is(err, ErrTokenTypeMismatch) {
 		t.Fatalf("expected ErrTokenTypeMismatch in Authenticate for RefreshToken, got %v", err)
 	}
 }
@@ -46,6 +47,7 @@ func TestRepro_NotBeforeTokenNotPoisonedByCache(t *testing.T) {
 		t.Fatalf("NewTokenManager: %v", err)
 	}
 	defer tm.Shutdown()
+	ctx := context.Background()
 
 	claims := &StandardClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -64,17 +66,15 @@ func TestRepro_NotBeforeTokenNotPoisonedByCache(t *testing.T) {
 		t.Fatalf("SignedString: %v", err)
 	}
 
-	// Validate before nbf -> must fail with ErrTokenNotValidYet and NOT enter cache.
-	if _, err := tm.ValidateToken(tokenStr); !errors.Is(err, jwt.ErrTokenNotValidYet) {
+	if _, err := tm.ValidateAccessToken(ctx, tokenStr); !errors.Is(err, jwt.ErrTokenNotValidYet) {
 		t.Fatalf("expected ErrTokenNotValidYet before nbf, got %v", err)
 	}
 	if tm.GetCacheSize() != 0 {
 		t.Fatalf("failed validation must not pollute cache, size=%d", tm.GetCacheSize())
 	}
 
-	// Advance clock past nbf (11s < 5m CacheTTL) -> must immediately succeed!
 	now = now.Add(11 * time.Second)
-	if _, err := tm.ValidateToken(tokenStr); err != nil {
+	if _, err := tm.ValidateAccessToken(ctx, tokenStr); err != nil {
 		t.Fatalf("valid token after nbf was rejected: %v", err)
 	}
 }
@@ -82,6 +82,7 @@ func TestRepro_NotBeforeTokenNotPoisonedByCache(t *testing.T) {
 // TestRepro_SmallCacheSizeDoesNotGrowUnbounded verifies that CacheSize < 5
 // strictly bounds cache size (even CacheSize=1 or 3).
 func TestRepro_SmallCacheSizeDoesNotGrowUnbounded(t *testing.T) {
+	ctx := context.Background()
 	for _, capSize := range []int{1, 2, 3, 4} {
 		opts := DefaultJWTOptions()
 		opts.BlacklistCleanInterval = 0
@@ -96,8 +97,8 @@ func TestRepro_SmallCacheSizeDoesNotGrowUnbounded(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GenerateToken: %v", err)
 			}
-			if _, err := tm.ValidateToken(tok); err != nil {
-				t.Fatalf("ValidateToken: %v", err)
+			if _, err := tm.ValidateAccessToken(ctx, tok); err != nil {
+				t.Fatalf("ValidateAccessToken: %v", err)
 			}
 			if got := tm.GetCacheSize(); got > capSize {
 				t.Fatalf("CacheSize=%d grew to %d entries", capSize, got)
@@ -181,15 +182,16 @@ func TestRepro_RefreshFailureDoesNotFalseTriggerReuseOnRetry(t *testing.T) {
 func TestRepro_RefreshTokenWithoutSessionIDStillReturnsReuseError(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
+	ctx := context.Background()
 
 	rt, err := tm.GenerateToken("user-nosid", &TokenOptions{TokenType: RefreshToken})
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
-	if _, _, err := tm.RefreshToken(rt); err != nil {
-		t.Fatalf("first RefreshToken: %v", err)
+	if _, err := tm.RefreshTokenPair(ctx, rt); err != nil {
+		t.Fatalf("first RefreshTokenPair: %v", err)
 	}
-	_, _, err = tm.RefreshToken(rt)
+	_, err = tm.RefreshTokenPair(ctx, rt)
 	if !errors.Is(err, ErrRefreshReuseDetected) {
 		t.Fatalf("expected ErrRefreshReuseDetected, got %v", err)
 	}
@@ -208,6 +210,7 @@ func TestRepro_CustomTokenProfilePreservedAndRoundTrippable(t *testing.T) {
 	}
 	tm := MustNewTokenManager(testSecretKey, opts)
 	defer tm.Shutdown()
+	ctx := context.Background()
 
 	pair, err := tm.IssueTokenPair(Identity{
 		Subject:      "u-1",
@@ -219,20 +222,19 @@ func TestRepro_CustomTokenProfilePreservedAndRoundTrippable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IssueTokenPair: %v", err)
 	}
-	claims, err := tm.ValidateToken(pair.AccessToken)
+	claims, err := tm.ValidateAccessToken(ctx, pair.AccessToken)
 	if err != nil {
-		t.Fatalf("ValidateToken: %v", err)
+		t.Fatalf("ValidateAccessToken: %v", err)
 	}
 	got := claims.Identity()
 	if got.ActorType != "admin" || got.TenantID != "t-9" || got.CustomClaims["region"] != "ap-east" {
 		t.Fatalf("claims.Identity() lost fields: %+v", got)
 	}
-	// Must round-trip cleanly into IssueTokenPair without colliding with profile claims!
 	reissued, err := tm.IssueTokenPair(got)
 	if err != nil {
 		t.Fatalf("round-trip IssueTokenPair(claims.Identity()) failed: %v", err)
 	}
-	id2, _, err := tm.Authenticate(context.Background(), reissued.AccessToken)
+	id2, _, err := tm.Authenticate(ctx, reissued.AccessToken)
 	if err != nil || id2.ActorType != "admin" || id2.CustomClaims["region"] != "ap-east" {
 		t.Fatalf("Authenticate round-trip failed: id=%+v err=%v", id2, err)
 	}

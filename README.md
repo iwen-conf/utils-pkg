@@ -8,14 +8,14 @@
 
 | 模块 | 职责与核心安全边界 | 文档 |
 | :--- | :--- | :--- |
-| [`jwt`](jwt/) | HS256 令牌签发、归一化业务身份 `Identity`、Access/Refresh 严格用途隔离、原子 Refresh Rotation 防重放、Token/Session 双级可插拔吊销、O(1) 受限验证缓存 | [jwt/使用说明.md](jwt/使用说明.md) |
-| [`crypto`](crypto/) | AES-GCM 认证加密（支持 AAD 上下文绑定）、Argon2id / scrypt / bcrypt 密码哈希（KDF 计算前校验参数上界）、并发安全密码策略 | [crypto/使用说明.md](crypto/使用说明.md) |
-| [`url`](url/) | 绑定 HTTP Method / Scheme / Host / Path / Query 的 v2 HMAC-SHA256 签名 URL，32 字节密钥下限，强制 `_exp` 过期控制 | [url/使用说明.md](url/使用说明.md) |
-| [`pagination`](pagination/) | 游标分页（`Base64JSONCodec` / 防篡改 `HMACCodec`）与防溢出偏移量分页（`OffsetRequest` / `OffsetResponse`） | [pagination/使用说明.md](pagination/使用说明.md) |
+| [`jwt`](jwt/) | HS256 令牌签发与 `kid` 多密钥轮换、不可变配置、归一化业务身份 `Identity`、Access/Refresh 严格用途隔离、原子 Refresh Rotation 防重放、Token/Session 双级可插拔吊销、SHA-256 键 O(1) 验证缓存与按需清理 | [jwt/使用说明.md](jwt/使用说明.md) |
+| [`crypto`](crypto/) | AES-GCM 认证加密（`Encryptor` 统一包含 AAD 上下文绑定）、Argon2id / scrypt / bcrypt 密码哈希（全 fail-fast 构造与参数上界校验）、并发安全密码策略 | [crypto/使用说明.md](crypto/使用说明.md) |
+| [`signedurl`](signedurl/) | 绑定 HTTP Method / Scheme / Host / Path / Query 的 v2 HMAC-SHA256 签名 URL，32 字节密钥下限，强制 `_exp` 过期控制 | [signedurl/使用说明.md](signedurl/使用说明.md) |
+| [`pagination`](pagination/) | 游标分页（`Base64JSONCodec` / 防篡改 `HMACCodec` 与泛型 `EncodeCursor`/`DecodeCursor`）及防溢出偏移量分页（`OffsetRequest` / `OffsetResponse`） | [pagination/使用说明.md](pagination/使用说明.md) |
 | [`captcha`](captcha/) | 基于 `crypto/rand` 的验证码生成与恒定时间比对（库不持有 TTL、限流与消费状态，空值永不通过） | [captcha/使用说明.md](captcha/使用说明.md) |
-| [`ptr`](ptr/) | 泛型指针构造与安全解引用（`Of`、`Value`、`Deref`、`Zero`）及基础类型便捷函数 | [ptr/使用说明.md](ptr/使用说明.md) |
+| [`ptr`](ptr/) | 纯泛型指针构造与安全解引用（`Of`、`Value`、`Deref`、`Zero`） | [ptr/使用说明.md](ptr/使用说明.md) |
 | [`slice`](slice/) | 保持顺序且不共享底层数组的泛型切片集合运算（`Unique`、`Union`、`Intersection`、`Difference`、`Filter`、`Map`、`Reduce`、`Sort`） | [slice/使用说明.md](slice/使用说明.md) |
-| [`useragent`](useragent/) | 启发式浏览器名称/版本提取与受限分片 LRU 缓存（仅用于展示/统计，**不可用于安全或权限判定**） | [useragent/使用说明.md](useragent/使用说明.md) |
+| [`useragent`](useragent/) | 启发式浏览器名称/版本提取与懒初始化强类型分片缓存（仅用于展示/统计，**不可用于安全或权限判定**） | [useragent/使用说明.md](useragent/使用说明.md) |
 
 完整破坏性变更与升级指引请参阅 [MIGRATION.md](MIGRATION.md) 与 [CHANGELOG.md](CHANGELOG.md)。
 

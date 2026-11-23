@@ -1,6 +1,7 @@
 package jwt
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -13,6 +14,7 @@ func FuzzStandardClaimsJSONRoundTrip(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, subject, sessionID, tokenType, roleID string) {
 		tm := MustNewTokenManager(testSecretKey)
+		defer tm.Shutdown()
 
 		opts := &TokenOptions{
 			TokenType: TokenType(tokenType),
@@ -32,7 +34,7 @@ func FuzzStandardClaimsJSONRoundTrip(f *testing.F) {
 			t.Skip()
 		}
 
-		claims, err := tm.ValidateToken(tok)
+		claims, err := tm.ValidateAccessToken(context.Background(), tok)
 		if err != nil {
 			t.Skip()
 		}
@@ -53,14 +55,15 @@ func FuzzStandardClaimsJSONRoundTrip(f *testing.F) {
 	})
 }
 
-func FuzzValidateToken_DoesNotPanic(f *testing.F) {
+func FuzzValidateAccessToken_DoesNotPanic(f *testing.F) {
 	tm := MustNewTokenManager(testSecretKey)
+	defer tm.Shutdown()
 	f.Add("invalid")
 	f.Add("a.b.c")
 	f.Add("aaaaaaaaaa.bbbbbbbbbb.cccccccccc")
 
 	f.Fuzz(func(t *testing.T, tokenStr string) {
-		_, _ = tm.ValidateToken(tokenStr)
+		_, _ = tm.ValidateAccessToken(context.Background(), tokenStr)
 	})
 }
 
@@ -76,8 +79,9 @@ func FuzzStandardClaimsUnmarshalJSON_DoesNotPanic(f *testing.F) {
 	})
 }
 
-func FuzzValidateToken_UnexpectedAlgDoesNotPanic(f *testing.F) {
+func FuzzValidateAccessToken_UnexpectedAlgDoesNotPanic(f *testing.F) {
 	tm := MustNewTokenManager(testSecretKey)
+	defer tm.Shutdown()
 	f.Add("u-1")
 
 	f.Fuzz(func(t *testing.T, subject string) {
@@ -86,6 +90,6 @@ func FuzzValidateToken_UnexpectedAlgDoesNotPanic(f *testing.F) {
 		if err != nil {
 			t.Skip()
 		}
-		_, _ = tm.ValidateToken(str)
+		_, _ = tm.ValidateAccessToken(context.Background(), str)
 	})
 }

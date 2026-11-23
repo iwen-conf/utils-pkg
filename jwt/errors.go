@@ -51,4 +51,10 @@ var (
 	ErrDuplicateClaimKey = errors.New("duplicate claim key")
 	// ErrMissingTokenID 表示需要一次性消费的令牌缺少 jti。
 	ErrMissingTokenID = errors.New("refresh token missing jti")
+	// ErrInvalidKeyID 表示配置中的 kid 为空或仅空白字符。
+	ErrInvalidKeyID = errors.New("invalid JWT key id")
+	// ErrDuplicateKeyID 表示配置中存在重复或冲突的 kid。
+	ErrDuplicateKeyID = errors.New("duplicate JWT key id with conflicting secret")
+	// ErrUnknownKeyID 表示令牌缺少必需的 kid 或引用了未知的 kid。
+	ErrUnknownKeyID = errors.New("unknown or missing JWT key id")
 )

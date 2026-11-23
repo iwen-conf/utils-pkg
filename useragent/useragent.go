@@ -69,12 +69,9 @@ var (
 )
 
 var (
-	// ErrInvalidCacheCapacity 表示 LRU 容量非法。
-	ErrInvalidCacheCapacity = errors.New("invalid cache capacity")
-	// ErrInvalidCacheTTL 表示 TTL 为负数。
-	ErrInvalidCacheTTL = errors.New("invalid cache ttl")
-	// ErrUninitializedCache 表示对 nil cache 调用 Put。
-	ErrUninitializedCache = errors.New("uninitialized cache")
+	errInvalidCacheCapacity = errors.New("invalid cache capacity")
+	errInvalidCacheTTL      = errors.New("invalid cache ttl")
+	errUninitializedCache   = errors.New("uninitialized cache")
 )
 
 // BrowserInfo 存储启发式浏览器识别结果，不是安全判定。
@@ -86,12 +83,11 @@ type BrowserInfo struct {
 
 type cacheEntry struct {
 	key        string
-	value      any
+	value      BrowserInfo
 	expiration time.Time
 }
 
-// LRUCache 使用 list+map 的 O(1) LRU。
-type LRUCache struct {
+type browserLRUCache struct {
 	capacity int
 	ttl      time.Duration
 	mu       sync.Mutex
@@ -100,47 +96,44 @@ type LRUCache struct {
 	now      func() time.Time
 }
 
-// NewLRUCache 创建 LRU 缓存。ttl==0 表示不过期。
-func NewLRUCache(capacity int, ttl time.Duration) (*LRUCache, error) {
+func newBrowserLRUCache(capacity int, ttl time.Duration) (*browserLRUCache, error) {
 	if capacity <= 0 {
-		return nil, ErrInvalidCacheCapacity
+		return nil, errInvalidCacheCapacity
 	}
 	if ttl < 0 {
-		return nil, ErrInvalidCacheTTL
+		return nil, errInvalidCacheTTL
 	}
-	return &LRUCache{
+	return &browserLRUCache{
 		capacity: capacity,
 		ttl:      ttl,
-		items:    make(map[string]*list.Element, capacity),
+		items:    make(map[string]*list.Element),
 		order:    list.New(),
 		now:      time.Now,
 	}, nil
 }
 
-// Get 读取未过期缓存。
-func (c *LRUCache) Get(key string) (any, bool) {
+func (c *browserLRUCache) get(key string) (BrowserInfo, bool) {
 	if c == nil {
-		return nil, false
+		return BrowserInfo{}, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	el, ok := c.items[key]
 	if !ok {
-		return nil, false
+		return BrowserInfo{}, false
 	}
 	entry := el.Value.(*cacheEntry)
 	if c.ttl > 0 && !c.now().Before(entry.expiration) {
 		c.removeElement(el)
-		return nil, false
+		return BrowserInfo{}, false
 	}
 	c.order.MoveToFront(el)
 	return entry.value, true
 }
 
-// Put 写入缓存。
-func (c *LRUCache) Put(key string, value any) error {
+func (c *browserLRUCache) put(key string, value BrowserInfo) error {
 	if c == nil {
-		return ErrUninitializedCache
+		return errUninitializedCache
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -165,22 +158,20 @@ func (c *LRUCache) Put(key string, value any) error {
 	return nil
 }
 
-func (c *LRUCache) removeElement(el *list.Element) {
+func (c *browserLRUCache) removeElement(el *list.Element) {
 	entry := el.Value.(*cacheEntry)
 	delete(c.items, entry.key)
 	c.order.Remove(el)
 }
 
-// ShardedCache 分片缓存。
-type ShardedCache struct {
-	shards [16]*LRUCache
+type shardedBrowserCache struct {
+	shards [16]*browserLRUCache
 }
 
-// NewShardedCache 创建分片缓存。
-func NewShardedCache(shardCapacity int, ttl time.Duration) (*ShardedCache, error) {
-	sc := &ShardedCache{}
+func newShardedBrowserCache(shardCapacity int, ttl time.Duration) (*shardedBrowserCache, error) {
+	sc := &shardedBrowserCache{}
 	for i := 0; i < 16; i++ {
-		cache, err := NewLRUCache(shardCapacity, ttl)
+		cache, err := newBrowserLRUCache(shardCapacity, ttl)
 		if err != nil {
 			return nil, err
 		}
@@ -189,7 +180,7 @@ func NewShardedCache(shardCapacity int, ttl time.Duration) (*ShardedCache, error
 	return sc, nil
 }
 
-func (sc *ShardedCache) getShard(key string) *LRUCache {
+func (sc *shardedBrowserCache) getShard(key string) *browserLRUCache {
 	if sc == nil {
 		return nil
 	}
@@ -202,30 +193,34 @@ func (sc *ShardedCache) getShard(key string) *LRUCache {
 	return sc.shards[hash&15]
 }
 
-// Get 从分片缓存获取值（nil 接收者安全）。
-func (sc *ShardedCache) Get(key string) (any, bool) {
+func (sc *shardedBrowserCache) get(key string) (BrowserInfo, bool) {
 	if sc == nil {
-		return nil, false
+		return BrowserInfo{}, false
 	}
-	return sc.getShard(key).Get(key)
+	return sc.getShard(key).get(key)
 }
 
-// Put 设置分片缓存值（nil 接收者安全）。
-func (sc *ShardedCache) Put(key string, value any) error {
+func (sc *shardedBrowserCache) put(key string, value BrowserInfo) error {
 	if sc == nil {
-		return ErrUninitializedCache
+		return errUninitializedCache
 	}
-	return sc.getShard(key).Put(key, value)
+	return sc.getShard(key).put(key, value)
 }
 
-var browserInfoCache *ShardedCache
+var (
+	browserCacheOnce sync.Once
+	browserInfoCache *shardedBrowserCache
+)
 
-func init() {
-	cache, err := NewShardedCache(1000, time.Hour)
-	if err != nil {
-		panic(err)
-	}
-	browserInfoCache = cache
+func getBrowserInfoCache() *shardedBrowserCache {
+	browserCacheOnce.Do(func() {
+		cache, err := newShardedBrowserCache(1000, time.Hour)
+		if err != nil {
+			panic(err)
+		}
+		browserInfoCache = cache
+	})
+	return browserInfoCache
 }
 
 func truncateUTF8Prefix(s string, maxBytes int) string {
@@ -256,6 +251,18 @@ func fastBotCheck(ua string) bool {
 	return false
 }
 
+func matchBrowserVersion(userAgent, browserName string, regex *regexp.Regexp) (BrowserInfo, bool) {
+	submatch := regex.FindStringSubmatch(userAgent)
+	if submatch == nil {
+		return BrowserInfo{}, false
+	}
+	version := ""
+	if len(submatch) > 1 {
+		version = submatch[1]
+	}
+	return BrowserInfo{IsBrowser: true, Name: browserName, Version: version}, true
+}
+
 func parseBrowserInfo(userAgent string) BrowserInfo {
 	if userAgent == "" {
 		return BrowserInfo{}
@@ -265,32 +272,48 @@ func parseBrowserInfo(userAgent string) BrowserInfo {
 	if fastBotCheck(ua) {
 		return BrowserInfo{IsBrowser: false}
 	}
-	switch {
-	case strings.Contains(ua, "edg/") || strings.Contains(ua, "edge/"):
-		return extractSubmatchInfo(userAgent, "Edge", edgeRegex)
-	case strings.Contains(ua, "opr/"):
-		return extractSubmatchInfo(userAgent, "Opera", operaRegex)
-	case chromeRegex.MatchString(userAgent):
-		return extractSubmatchInfo(userAgent, "Chrome", chromeRegex)
-	case firefoxRegex.MatchString(userAgent):
-		return extractSubmatchInfo(userAgent, "Firefox", firefoxRegex)
-	case msieRegex.MatchString(userAgent):
-		return extractSubmatchInfo(userAgent, "Internet Explorer", msieRegex)
-	case tridentRvRegex.MatchString(userAgent):
-		return extractSubmatchInfo(userAgent, "Internet Explorer", tridentRvRegex)
-	case tridentRegex.MatchString(userAgent):
-		return extractSubmatchInfo(userAgent, "Internet Explorer", tridentRegex)
-	case strings.Contains(ua, "safari/"):
-		if versionRegex.MatchString(userAgent) {
-			return extractSubmatchInfo(userAgent, "Safari", versionRegex)
+	if strings.Contains(ua, "edg/") || strings.Contains(ua, "edge/") {
+		if info, ok := matchBrowserVersion(userAgent, "Edge", edgeRegex); ok {
+			return info
 		}
-		return extractSubmatchInfo(userAgent, "Safari", safariRegex)
-	default:
-		if fastBrowserCheck(ua) {
-			return BrowserInfo{IsBrowser: true, Name: "Unknown"}
-		}
-		return BrowserInfo{IsBrowser: false}
+		return BrowserInfo{IsBrowser: true, Name: "Edge"}
 	}
+	if strings.Contains(ua, "opr/") {
+		if info, ok := matchBrowserVersion(userAgent, "Opera", operaRegex); ok {
+			return info
+		}
+		return BrowserInfo{IsBrowser: true, Name: "Opera"}
+	}
+
+	versionMatchers := []struct {
+		name  string
+		regex *regexp.Regexp
+	}{
+		{"Chrome", chromeRegex},
+		{"Firefox", firefoxRegex},
+		{"Internet Explorer", msieRegex},
+		{"Internet Explorer", tridentRvRegex},
+		{"Internet Explorer", tridentRegex},
+	}
+	for _, m := range versionMatchers {
+		if info, ok := matchBrowserVersion(userAgent, m.name, m.regex); ok {
+			return info
+		}
+	}
+
+	if strings.Contains(ua, "safari/") {
+		if info, ok := matchBrowserVersion(userAgent, "Safari", versionRegex); ok {
+			return info
+		}
+		if info, ok := matchBrowserVersion(userAgent, "Safari", safariRegex); ok {
+			return info
+		}
+		return BrowserInfo{IsBrowser: true, Name: "Safari"}
+	}
+	if fastBrowserCheck(ua) {
+		return BrowserInfo{IsBrowser: true, Name: "Unknown"}
+	}
+	return BrowserInfo{IsBrowser: false}
 }
 
 // IsBrowser 返回启发式识别结果，不是安全判定。
@@ -304,23 +327,15 @@ func GetBrowserInfo(userAgent string) BrowserInfo {
 		return BrowserInfo{IsBrowser: false}
 	}
 	cacheable := len(userAgent) <= MaxUserAgentLength
+	cache := getBrowserInfoCache()
 	if cacheable {
-		if result, ok := browserInfoCache.Get(userAgent); ok {
-			return result.(BrowserInfo)
+		if result, ok := cache.get(userAgent); ok {
+			return result
 		}
 	}
 	result := parseBrowserInfo(userAgent)
 	if cacheable {
-		_ = browserInfoCache.Put(userAgent, result)
+		_ = cache.put(userAgent, result)
 	}
 	return result
-}
-
-func extractSubmatchInfo(userAgent, browserName string, regex *regexp.Regexp) BrowserInfo {
-	submatch := regex.FindStringSubmatch(userAgent)
-	version := ""
-	if len(submatch) > 1 {
-		version = submatch[1]
-	}
-	return BrowserInfo{IsBrowser: true, Name: browserName, Version: version}
 }

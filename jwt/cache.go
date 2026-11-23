@@ -2,15 +2,20 @@ package jwt
 
 import (
 	"container/list"
+	"crypto/sha256"
 	"sync"
 	"time"
 )
 
 type cachedClaimsEntry struct {
-	key        string
+	key        [32]byte
 	claims     *StandardClaims
 	createdAt  time.Time
 	validUntil time.Time
+}
+
+func cacheKey(token string) [32]byte {
+	return sha256.Sum256([]byte(token))
 }
 
 // validationCache 是严格受限的 O(1) LRU 正向解析缓存。
@@ -20,22 +25,25 @@ type cachedClaimsEntry struct {
 //  2. validUntil = min(now + cacheTTL, claims.ExpiresAt)，绝不越过令牌自身 exp。
 //  3. 写入和读取均执行深拷贝，隔离外部可变状态。
 //  4. 容量严格按 LRU 淘汰，即使 capacity == 1 也不会越界增长。
+//  5. map key 仅存令牌 SHA-256 摘要，不持有原始 JWT 字符串。
 type validationCache struct {
 	mu    sync.Mutex
-	items map[string]*list.Element
+	items map[[32]byte]*list.Element
 	order *list.List
 }
 
 func newValidationCache() *validationCache {
 	return &validationCache{
-		items: make(map[string]*list.Element),
+		items: make(map[[32]byte]*list.Element),
 		order: list.New(),
 	}
 }
 
 func (c *validationCache) get(token string, now time.Time) (*StandardClaims, error, bool) {
+	k := cacheKey(token)
+
 	c.mu.Lock()
-	el, exists := c.items[token]
+	el, exists := c.items[k]
 	if !exists {
 		c.mu.Unlock()
 		return nil, nil, false
@@ -75,10 +83,12 @@ func (c *validationCache) put(token string, claims *StandardClaims, now time.Tim
 		validUntil = claims.ExpiresAt.Time
 	}
 
+	k := cacheKey(token)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if existing, ok := c.items[token]; ok {
+	if existing, ok := c.items[k]; ok {
 		entry := existing.Value.(*cachedClaimsEntry)
 		entry.claims = cloned
 		entry.createdAt = now
@@ -96,61 +106,22 @@ func (c *validationCache) put(token string, claims *StandardClaims, now time.Tim
 	}
 
 	el := c.order.PushFront(&cachedClaimsEntry{
-		key:        token,
+		key:        k,
 		claims:     cloned,
 		createdAt:  now,
 		validUntil: validUntil,
 	})
-	c.items[token] = el
+	c.items[k] = el
 	return nil
 }
 
 func (c *validationCache) delete(token string) {
+	k := cacheKey(token)
 	c.mu.Lock()
-	if el, ok := c.items[token]; ok {
+	if el, ok := c.items[k]; ok {
 		c.removeElementLocked(el)
 	}
 	c.mu.Unlock()
-}
-
-func (c *validationCache) clear() {
-	c.mu.Lock()
-	c.items = make(map[string]*list.Element)
-	c.order.Init()
-	c.mu.Unlock()
-}
-
-func (c *validationCache) resize(capacity int) {
-	if capacity < 0 {
-		capacity = 0
-	}
-	c.mu.Lock()
-	for c.order.Len() > capacity {
-		back := c.order.Back()
-		if back == nil {
-			break
-		}
-		c.removeElementLocked(back)
-	}
-	c.mu.Unlock()
-}
-
-func (c *validationCache) clampTTL(now time.Time, ttl time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	for el := c.order.Front(); el != nil; {
-		next := el.Next()
-		entry := el.Value.(*cachedClaimsEntry)
-		maxValidUntil := entry.createdAt.Add(ttl)
-		if maxValidUntil.Before(entry.validUntil) {
-			entry.validUntil = maxValidUntil
-		}
-		if !now.Before(entry.validUntil) {
-			c.removeElementLocked(el)
-		}
-		el = next
-	}
 }
 
 func (c *validationCache) cleanExpired(now time.Time) int {

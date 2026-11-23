@@ -569,6 +569,10 @@ func TestVerifyScryptHash_InvalidFormat(t *testing.T) {
 func TestPasswordHasherInterface(t *testing.T) {
 	password := []byte("test-password-123")
 
+	bcryptHasher, err := NewBcryptHasher(BcryptCostDefault)
+	if err != nil {
+		t.Fatalf("NewBcryptHasher: %v", err)
+	}
 	argonHasher, err := NewArgon2Hasher(DefaultArgon2Params())
 	if err != nil {
 		t.Fatalf("NewArgon2Hasher: %v", err)
@@ -578,7 +582,7 @@ func TestPasswordHasherInterface(t *testing.T) {
 		t.Fatalf("NewScryptHasher: %v", err)
 	}
 	hashers := []PasswordHasher{
-		NewBcryptHasher(BcryptCostDefault),
+		bcryptHasher,
 		argonHasher,
 		scryptHasher,
 	}
@@ -610,24 +614,6 @@ func TestPasswordHasherInterface(t *testing.T) {
 				t.Error("Verify() should return false for wrong password")
 			}
 		})
-	}
-}
-
-func TestBenchmarkPasswordHashers(t *testing.T) {
-	password := []byte("test-password")
-	iterations := 5 // 减少迭代次数以避免测试运行时间过长
-
-	results := BenchmarkPasswordHashers(password, iterations)
-
-	// 验证结果包含所有算法
-	expectedAlgorithms := []string{"bcrypt", "argon2", "argon2-fast", "scrypt", "scrypt-fast"}
-	for _, algo := range expectedAlgorithms {
-		if _, exists := results[algo]; !exists {
-			t.Errorf("Benchmark results missing algorithm: %s", algo)
-		}
-		if results[algo] <= 0 {
-			t.Errorf("Benchmark duration for %s should be positive", algo)
-		}
 	}
 }
 

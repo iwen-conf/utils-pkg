@@ -9,27 +9,29 @@ import (
 	"unicode/utf8"
 )
 
-func TestNewAESEncryptorWithMode_RejectsNonGCM(t *testing.T) {
-	key := bytes.Repeat([]byte{1}, 16)
-	enc, err := NewAESEncryptorWithMode(key, ModeCFB)
-	if enc != nil || !errors.Is(err, ErrUnsupportedEncryptionMode) {
-		t.Fatalf("CFB: enc=%v err=%v", enc, err)
-	}
-	enc, err = NewAESEncryptorWithMode(key, EncryptionMode(99))
-	if enc != nil || !errors.Is(err, ErrUnsupportedEncryptionMode) {
-		t.Fatalf("unknown mode: enc=%v err=%v", enc, err)
-	}
-	for _, n := range []int{15, 17, 23, 25, 31, 33} {
+func TestNewAESEncryptor_ValidationAndEncoding(t *testing.T) {
+	for _, n := range []int{0, 15, 17, 23, 25, 31, 33} {
 		if _, err := NewAESEncryptor(make([]byte, n)); !errors.Is(err, ErrInvalidAESKeySize) {
 			t.Fatalf("key %d: %v", n, err)
 		}
 	}
-	enc, err = NewAESEncryptor(key)
+	key := bytes.Repeat([]byte{1}, 16)
+	enc, err := NewAESEncryptor(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := enc.EncryptWithOptions([]byte("x"), EncodingType(9)); !errors.Is(err, ErrUnsupportedEncoding) {
-		t.Fatalf("encoding: %v", err)
+	var encIfc Encryptor = enc
+	if _, err := encIfc.EncryptWithOptions([]byte("x"), EncodingType(9)); !errors.Is(err, ErrUnsupportedEncoding) {
+		t.Fatalf("EncryptWithOptions invalid encoding: %v", err)
+	}
+	if _, err := encIfc.DecryptWithOptions("YWJj", EncodingType(9)); !errors.Is(err, ErrUnsupportedEncoding) {
+		t.Fatalf("DecryptWithOptions invalid encoding: %v", err)
+	}
+	if _, err := encIfc.EncryptWithAADAndEncoding([]byte("x"), []byte("aad"), EncodingType(9)); !errors.Is(err, ErrUnsupportedEncoding) {
+		t.Fatalf("EncryptWithAADAndEncoding invalid encoding: %v", err)
+	}
+	if _, err := encIfc.DecryptWithAADAndEncoding("YWJj", []byte("aad"), EncodingType(9)); !errors.Is(err, ErrUnsupportedEncoding) {
+		t.Fatalf("DecryptWithAADAndEncoding invalid encoding: %v", err)
 	}
 }
 

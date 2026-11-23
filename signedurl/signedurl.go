@@ -1,11 +1,10 @@
-package url
+package signedurl
 
 import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -242,64 +241,6 @@ func signCanonical(secretKey, canonical string) string {
 	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
 }
 
-// ParseURL 解析 URL 并返回其组成部分。
-func ParseURL(rawURL string) (map[string]interface{}, error) {
-	parsedURL, err := url.Parse(rawURL)
-	if err != nil {
-		return nil, err
-	}
-
-	result := make(map[string]interface{})
-	result["scheme"] = parsedURL.Scheme
-	result["host"] = parsedURL.Host
-	result["path"] = parsedURL.Path
-	result["fragment"] = parsedURL.Fragment
-
-	queryParams := make(map[string]interface{})
-	for k, v := range parsedURL.Query() {
-		if len(v) == 1 {
-			queryParams[k] = v[0]
-		} else {
-			queryParams[k] = v
-		}
-	}
-	result["query"] = queryParams
-	return result, nil
-}
-
-// SerializeParams 序列化参数为 URL 查询字符串。
-func SerializeParams(params map[string]interface{}) string {
-	if len(params) == 0 {
-		return ""
-	}
-
-	values := url.Values{}
-	for k, v := range params {
-		if v == nil {
-			continue
-		}
-		switch val := v.(type) {
-		case string:
-			values.Add(k, val)
-		case []string:
-			for _, item := range val {
-				values.Add(k, item)
-			}
-		case int, int8, int16, int32, int64,
-			uint, uint8, uint16, uint32, uint64,
-			float32, float64, bool:
-			values.Add(k, fmt.Sprint(val))
-		case fmt.Stringer:
-			values.Add(k, val.String())
-		default:
-			if jsonStr, err := json.Marshal(val); err == nil {
-				values.Add(k, string(jsonStr))
-			}
-		}
-	}
-	return values.Encode()
-}
-
 // ValidateSignature 按 GET 验证 v2 签名 URL。
 func ValidateSignature(rawURL, secretKey string, maxAgeSeconds int64) (bool, error) {
 	return ValidateSignatureWithMethod(rawURL, "GET", secretKey, maxAgeSeconds)
@@ -393,27 +334,6 @@ func BatchValidateSignatures(urls []string, secretKey string, maxAgeSeconds int6
 		results[rawURL] = err
 	}
 	return results
-}
-
-// DeserializeParams 反序列化 URL 查询字符串为参数映射。
-func DeserializeParams(queryString string) (map[string]interface{}, error) {
-	result := make(map[string]interface{})
-	if queryString == "" {
-		return result, nil
-	}
-	queryString = strings.TrimPrefix(queryString, "?")
-	values, err := url.ParseQuery(queryString)
-	if err != nil {
-		return nil, fmt.Errorf("无效的查询字符串: %w", err)
-	}
-	for k, v := range values {
-		if len(v) == 1 {
-			result[k] = v[0]
-		} else {
-			result[k] = v
-		}
-	}
-	return result, nil
 }
 
 // CreateSignedURL 快速创建带签名的 GET URL。

@@ -26,6 +26,8 @@ var (
 	ErrHMACKeyTooShort = errors.New("pagination: HMAC key too short, must be at least 32 bytes")
 	// ErrUninitializedHMACCodec 表示 nil、零值或未完成构造的 codec
 	ErrUninitializedHMACCodec = errors.New("pagination: HMAC codec is not initialized")
+	// ErrNilCodec 表示传入了空 CursorCodec
+	ErrNilCodec = errors.New("pagination: cursor codec cannot be nil")
 )
 
 // CursorRequest 表示基于游标的分页请求参数。
@@ -77,6 +79,26 @@ type CursorCodec interface {
 	Decode(s string, v any) error
 }
 
+// EncodeCursor 使用指定编解码器编码强类型游标载荷。
+func EncodeCursor[T any](codec CursorCodec, payload T) (string, error) {
+	if codec == nil {
+		return "", ErrNilCodec
+	}
+	return codec.Encode(payload)
+}
+
+// DecodeCursor 使用指定编解码器解码强类型游标载荷。
+func DecodeCursor[T any](codec CursorCodec, cursor string) (T, error) {
+	var out T
+	if codec == nil {
+		return out, ErrNilCodec
+	}
+	if err := codec.Decode(cursor, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 // Base64JSONCodec 使用 JSON + Base64(URL) 实现游标编码。
 type Base64JSONCodec struct{}
 
@@ -97,10 +119,10 @@ func (Base64JSONCodec) Decode(s string, v any) error {
 	}
 	b, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidCursorFormat, err)
+		return fmt.Errorf("%w: %w", ErrInvalidCursorFormat, err)
 	}
 	if err := json.Unmarshal(b, v); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidCursorFormat, err)
+		return fmt.Errorf("%w: %w", ErrInvalidCursorFormat, err)
 	}
 	return nil
 }
@@ -166,12 +188,14 @@ func (c *HMACCodec) Decode(s string, v any) error {
 	if len(s) > MaxCursorLength {
 		return ErrInvalidCursorFormat
 	}
-	parts := strings.Split(s, ".")
-	if len(parts) != 3 || parts[0] != "v1" {
+	version, rest, ok := strings.Cut(s, ".")
+	if !ok || version != "v1" {
 		return ErrInvalidCursorFormat
 	}
-	payload := parts[1]
-	sig := parts[2]
+	payload, sig, ok := strings.Cut(rest, ".")
+	if !ok || strings.ContainsRune(sig, '.') {
+		return ErrInvalidCursorFormat
+	}
 	mac := hmac.New(sha256.New, c.key)
 	mac.Write([]byte(payload))
 	expSig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))

@@ -17,18 +17,18 @@ func TestTokenManagerSharedRevocationStoreOverridesValidationCache(t *testing.T)
 	if err != nil {
 		t.Fatalf("GenerateToken() error = %v", err)
 	}
-	if _, err := validator.ValidateToken(token); err != nil {
-		t.Fatalf("ValidateToken(before revoke) error = %v", err)
+	if _, err := validator.ValidateAccessToken(context.Background(), token); err != nil {
+		t.Fatalf("ValidateAccessToken(before revoke) error = %v", err)
 	}
 	if validator.GetCacheSize() == 0 {
 		t.Fatal("validation cache is empty before shared revoke")
 	}
 
-	if err := issuer.RevokeToken(token); err != nil {
+	if err := issuer.RevokeToken(context.Background(), token); err != nil {
 		t.Fatalf("RevokeToken() error = %v", err)
 	}
-	if _, err := validator.ValidateToken(token); !errors.Is(err, ErrTokenRevoked) {
-		t.Fatalf("ValidateToken(after revoke) error = %v, want ErrTokenRevoked", err)
+	if _, err := validator.ValidateAccessToken(context.Background(), token); !errors.Is(err, ErrTokenRevoked) {
+		t.Fatalf("ValidateAccessToken(after revoke) error = %v, want ErrTokenRevoked", err)
 	}
 }
 
@@ -40,10 +40,10 @@ func TestTokenManagerRevokeTokenIsIdempotentAndDoesNotStoreRawToken(t *testing.T
 		t.Fatalf("GenerateToken() error = %v", err)
 	}
 
-	if err := manager.RevokeToken(token); err != nil {
+	if err := manager.RevokeToken(context.Background(), token); err != nil {
 		t.Fatalf("RevokeToken(first) error = %v", err)
 	}
-	if err := manager.RevokeToken(token); err != nil {
+	if err := manager.RevokeToken(context.Background(), token); err != nil {
 		t.Fatalf("RevokeToken(second) error = %v", err)
 	}
 
@@ -63,26 +63,26 @@ func TestTokenManagerRevokeSessionRejectsCachedSessionTokens(t *testing.T) {
 	store := NewMemoryRevocationStore()
 	issuer := newManagerWithRevocationStore(t, store)
 	validator := newManagerWithRevocationStore(t, store)
-	pair, err := issuer.GenerateTokenPair("admin-1")
+	pair, err := issuer.IssueTokenPair(Identity{Subject: "admin-1"})
 	if err != nil {
-		t.Fatalf("GenerateTokenPair() error = %v", err)
+		t.Fatalf("IssueTokenPair() error = %v", err)
 	}
 
-	if _, err := validator.ValidateToken(pair.AccessToken); err != nil {
-		t.Fatalf("ValidateToken(access before revoke) error = %v", err)
+	if _, err := validator.ValidateAccessToken(context.Background(), pair.AccessToken); err != nil {
+		t.Fatalf("ValidateAccessToken(access before revoke) error = %v", err)
 	}
 	if _, err := validator.ValidateRefreshToken(context.Background(), pair.RefreshToken); err != nil {
 		t.Fatalf("ValidateRefreshToken(refresh before revoke) error = %v", err)
 	}
-	if err := issuer.RevokeSession(pair.AccessToken); err != nil {
+	if err := issuer.RevokeSession(context.Background(), pair.AccessToken); err != nil {
 		t.Fatalf("RevokeSession(first) error = %v", err)
 	}
-	if err := issuer.RevokeSession(pair.RefreshToken); err != nil {
+	if err := issuer.RevokeSession(context.Background(), pair.RefreshToken); err != nil {
 		t.Fatalf("RevokeSession(second) error = %v", err)
 	}
 
-	if _, err := validator.ValidateToken(pair.AccessToken); !errors.Is(err, ErrSessionRevoked) {
-		t.Fatalf("ValidateToken(access after revoke) error = %v, want ErrSessionRevoked", err)
+	if _, err := validator.ValidateAccessToken(context.Background(), pair.AccessToken); !errors.Is(err, ErrSessionRevoked) {
+		t.Fatalf("ValidateAccessToken(access after revoke) error = %v, want ErrSessionRevoked", err)
 	}
 	if _, err := validator.ValidateRefreshToken(context.Background(), pair.RefreshToken); !errors.Is(err, ErrSessionRevoked) {
 		t.Fatalf("ValidateRefreshToken(refresh after revoke) error = %v, want ErrSessionRevoked", err)
@@ -95,7 +95,7 @@ func TestTokenManagerRevokeSessionRejectsTokenWithoutSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateToken() error = %v", err)
 	}
-	if err := manager.RevokeSession(token); !errors.Is(err, ErrSessionIDMissing) {
+	if err := manager.RevokeSession(context.Background(), token); !errors.Is(err, ErrSessionIDMissing) {
 		t.Fatalf("RevokeSession() error = %v, want ErrSessionIDMissing", err)
 	}
 }
@@ -114,10 +114,10 @@ func TestTokenManagerRevocationStoreErrorsFailClosed(t *testing.T) {
 		t.Fatalf("GenerateToken() error = %v", err)
 	}
 
-	if _, err := manager.ValidateToken(token); !errors.Is(err, storeErr) {
-		t.Fatalf("ValidateToken() error = %v, want wrapped store error", err)
+	if _, err := manager.ValidateAccessToken(context.Background(), token); !errors.Is(err, storeErr) {
+		t.Fatalf("ValidateAccessToken() error = %v, want wrapped store error", err)
 	}
-	if err := manager.RevokeToken(token); !errors.Is(err, storeErr) {
+	if err := manager.RevokeToken(context.Background(), token); !errors.Is(err, storeErr) {
 		t.Fatalf("RevokeToken() error = %v, want wrapped store error", err)
 	}
 }
@@ -130,8 +130,8 @@ func TestTokenManagerContextCancellationStopsValidation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := manager.ValidateTokenContext(ctx, token); !errors.Is(err, context.Canceled) {
-		t.Fatalf("ValidateTokenContext() error = %v, want context.Canceled", err)
+	if _, err := manager.ValidateAccessToken(ctx, token); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ValidateAccessToken() error = %v, want context.Canceled", err)
 	}
 }
 

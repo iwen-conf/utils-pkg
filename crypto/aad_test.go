@@ -15,11 +15,13 @@ func TestAESEncryptor_AADAndCiphertextBounds(t *testing.T) {
 
 	// Standard Base64 + AAD
 	aad := []byte("tenant:t1|user:u9")
-	ct, err := enc.EncryptWithAAD([]byte("secret-value"), aad)
+	// Verify Encryptor interface exposes AAD methods directly.
+	var encIfc Encryptor = enc
+	ct, err := encIfc.EncryptWithAAD([]byte("secret-value"), aad)
 	if err != nil {
 		t.Fatalf("EncryptWithAAD: %v", err)
 	}
-	pt, err := enc.DecryptWithAAD(ct, aad)
+	pt, err := encIfc.DecryptWithAAD(ct, aad)
 	if err != nil || string(pt) != "secret-value" {
 		t.Fatalf("DecryptWithAAD: pt=%q err=%v", pt, err)
 	}

@@ -106,11 +106,11 @@ func TestRefreshToken_SharedStoreSingleFirstUse(t *testing.T) {
 	}
 	results := make(chan result, 2)
 	go func() {
-		_, _, err := m1.RefreshToken(refresh)
+		_, err := m1.RefreshTokenPair(context.Background(), refresh)
 		results <- result{err: err}
 	}()
 	go func() {
-		_, _, err := m2.RefreshToken(refresh)
+		_, err := m2.RefreshTokenPair(context.Background(), refresh)
 		results <- result{err: err}
 	}()
 
@@ -146,9 +146,9 @@ func TestRefreshToken_StoreErrorDoesNotIssueTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
-	access, newRefresh, err := tm.RefreshToken(refresh)
-	if err == nil || access != "" || newRefresh != "" {
-		t.Fatalf("store error must not issue tokens: access=%q refresh=%q err=%v", access, newRefresh, err)
+	pair, err := tm.RefreshTokenPair(context.Background(), refresh)
+	if err == nil || pair != nil {
+		t.Fatalf("store error must not issue tokens: pair=%+v err=%v", pair, err)
 	}
 	if !errors.Is(err, store.consumeErr) {
 		t.Fatalf("expected store error in chain, got %v", err)

@@ -4,6 +4,31 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **JWT**:
+  - Key rotation support via `JWTOptions.SigningKeyID`, `VerificationKeys`, and `LegacyVerificationKey`, plus typed sentinels `ErrInvalidKeyID`, `ErrDuplicateKeyID`, and `ErrUnknownKeyID`.
+- **Pagination**:
+  - Generic strongly-typed cursor helpers `EncodeCursor[T]` and `DecodeCursor[T]` with `ErrNilCodec`.
+
+### Changed
+
+- **URL -> `signedurl`**: Renamed package `github.com/iwen-conf/utils-pkg/url` to `github.com/iwen-conf/utils-pkg/signedurl` to avoid shadowing standard library `net/url`.
+- **Crypto**: `NewBcryptHasher(cost)` now returns `(*BcryptHasher, error)` with fail-fast cost validation; `Encryptor` interface now includes `EncryptWithAAD`, `DecryptWithAAD`, `EncryptWithAADAndEncoding`, and `DecryptWithAADAndEncoding`.
+- **Pagination**: `Base64JSONCodec.Decode` wraps base64/JSON errors with `%w` to preserve `errors.Is`/`errors.As` chains; `HMACCodec.Decode` uses zero-allocation `strings.Cut`.
+- **User-Agent**: Global browser info cache is now private, strongly typed (`BrowserInfo` without `any`), lazily initialized via `sync.Once`, and uses single-pass regex matching.
+- **JWT**:
+  - Configuration is immutable after `NewTokenManager`; validation cache keys store `[32]byte` SHA-256 token digests instead of raw JWT strings; background cleanup goroutine starts on demand only when needed; `ErrorReporter` defaults to silent no-op when nil.
+  - Renamed `RevokeTokenContext`, `RevokeSessionContext`, `IsTokenRevokedContext`, `IsSessionRevokedContext`, `CleanBlacklistContext`, and `GetBlacklistSizeContext` to `RevokeToken`, `RevokeSession`, `IsTokenRevoked`, `IsSessionRevoked`, `CleanBlacklist`, and `GetBlacklistSize`.
+
+### Removed
+
+- **Ptr**: Removed all 60 pre-generics typed pointer helpers; kept only `Of[T]`, `Value[T]`, `Deref[T]`, `Zero[T]`, and `ErrNilPointer`.
+- **SignedURL**: Removed weak-typed `ParseURL`, `SerializeParams`, and `DeserializeParams`.
+- **User-Agent**: Unexported `LRUCache`, `NewLRUCache`, `ShardedCache`, `NewShardedCache`, and `ErrInvalidCacheCapacity` / `ErrInvalidCacheTTL` / `ErrUninitializedCache`.
+- **Crypto**: Removed `EncryptionMode`, `ModeGCM`, `ModeCFB`, `ErrUnsupportedEncryptionMode`, `NewAESEncryptorWithMode`, `NewBcryptHasherChecked`, `BenchmarkPasswordHashers`, `BenchmarkPasswordHashersChecked`, and `ErrInvalidBenchmarkIterations`.
+- **JWT**: Removed `EnableLog`, runtime setters (`EnableCache`, `SetCacheTTL`, `SetCacheSize`, `SetTokenExpiry`, `SetIssuer`, `SetAudience`), and legacy/deprecated methods (`GenerateTokenPair`, `GenerateIdentityToken`, `GenerateIdentityTokenPair`, `ValidateToken`, `ValidateTokenContext`, `RefreshToken`, `RefreshTokenContext`, `IsBlacklisted`, and old no-context `RevokeToken`/`RevokeSession`/`CleanBlacklist`/`GetBlacklistSize`).
+
 ## [0.6.0]
 
 ### Removed

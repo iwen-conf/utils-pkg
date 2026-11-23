@@ -112,6 +112,11 @@ type TokenPair struct {
 
 // IssueTokenPair 是推荐的主入口：按统一业务身份签发共享会话 ID 的 Access/Refresh 令牌对。
 func (m *TokenManager) IssueTokenPair(identity Identity, options ...*TokenPairOptions) (*TokenPair, error) {
+	subject := strings.TrimSpace(identity.Subject)
+	if subject == "" {
+		return nil, fmt.Errorf("%w: identity subject cannot be empty", ErrEmptySubject)
+	}
+
 	opts := defaultTokenPairOptions(options...)
 	if strings.TrimSpace(opts.SessionID) == "" {
 		opts.SessionID = strings.TrimSpace(identity.SessionID)
@@ -121,77 +126,7 @@ func (m *TokenManager) IssueTokenPair(identity Identity, options ...*TokenPairOp
 	if err != nil {
 		return nil, err
 	}
-	opts.CustomClaims = commonClaims
 
-	return m.GenerateTokenPair(strings.TrimSpace(identity.Subject), opts)
-}
-
-// IssueAccessToken 按统一业务身份签发单个访问令牌（强制 TokenType 为 AccessToken）。
-func (m *TokenManager) IssueAccessToken(identity Identity, options ...*TokenOptions) (string, error) {
-	var tokenOptions *TokenOptions
-	if len(options) > 0 && options[0] != nil {
-		if options[0].TokenType != "" && options[0].TokenType != AccessToken {
-			return "", fmt.Errorf("%w: IssueAccessToken only issues %q, got %q", ErrTokenTypeMismatch, AccessToken, options[0].TokenType)
-		}
-		tokenOptions = cloneTokenOptions(options[0])
-	} else {
-		tokenOptions = DefaultTokenOptions()
-	}
-	tokenOptions.TokenType = AccessToken
-	return m.GenerateIdentityToken(identity, tokenOptions)
-}
-
-// Authenticate 是推荐的鉴权入口：验证 AccessToken 并直接返回归一化业务身份与声明。
-// 若传入 RefreshToken、吊销令牌或会话已注销，均安全拒绝。
-func (m *TokenManager) Authenticate(ctx context.Context, tokenStr string) (Identity, *StandardClaims, error) {
-	claims, err := m.ValidateAccessToken(ctx, tokenStr)
-	if err != nil {
-		return Identity{}, nil, err
-	}
-	return m.ExtractIdentity(claims), claims, nil
-}
-
-// ExtractIdentity 使用当前管理器的 TokenProfile 从声明中提取业务身份。
-func (m *TokenManager) ExtractIdentity(claims *StandardClaims) Identity {
-	if claims == nil {
-		return Identity{}
-	}
-	return claims.Identity(&m.tokenProfile)
-}
-
-// GenerateIdentityTokenPair 兼容入口：等同于 IssueTokenPair。
-func (m *TokenManager) GenerateIdentityTokenPair(identity Identity, options ...*TokenPairOptions) (*TokenPair, error) {
-	return m.IssueTokenPair(identity, options...)
-}
-
-// GenerateIdentityToken 使用归一化业务身份签发单个令牌。
-func (m *TokenManager) GenerateIdentityToken(identity Identity, options ...*TokenOptions) (string, error) {
-	tokenOptions := DefaultTokenOptions()
-	if len(options) > 0 && options[0] != nil {
-		tokenOptions = cloneTokenOptions(options[0])
-	}
-
-	if strings.TrimSpace(tokenOptions.SessionID) == "" {
-		tokenOptions.SessionID = strings.TrimSpace(identity.SessionID)
-	}
-
-	claims, err := m.identityClaims(identity, tokenOptions.CustomClaims)
-	if err != nil {
-		return "", err
-	}
-	tokenOptions.CustomClaims = claims
-
-	return m.GenerateToken(strings.TrimSpace(identity.Subject), tokenOptions)
-}
-
-// GenerateTokenPair 为指定 subject 签发共享同一 SessionID 的 Access/Refresh 令牌对。
-func (m *TokenManager) GenerateTokenPair(subject string, options ...*TokenPairOptions) (*TokenPair, error) {
-	subject = strings.TrimSpace(subject)
-	if subject == "" {
-		return nil, ErrEmptySubject
-	}
-
-	opts := defaultTokenPairOptions(options...)
 	sessionID := strings.TrimSpace(opts.SessionID)
 	if sessionID == "" {
 		generatedSessionID, err := generateRandomHex(16)
@@ -201,11 +136,11 @@ func (m *TokenManager) GenerateTokenPair(subject string, options ...*TokenPairOp
 		sessionID = generatedSessionID
 	}
 
-	accessOptions, err := pairTokenOptions(opts.AccessOptions, AccessToken, sessionID, opts.CustomClaims)
+	accessOptions, err := pairTokenOptions(opts.AccessOptions, AccessToken, sessionID, commonClaims)
 	if err != nil {
 		return nil, err
 	}
-	refreshOptions, err := pairTokenOptions(opts.RefreshOptions, RefreshToken, sessionID, opts.CustomClaims)
+	refreshOptions, err := pairTokenOptions(opts.RefreshOptions, RefreshToken, sessionID, commonClaims)
 	if err != nil {
 		return nil, err
 	}
@@ -227,6 +162,47 @@ func (m *TokenManager) GenerateTokenPair(subject string, options ...*TokenPairOp
 		AccessExpiresIn:  int64(m.tokenExpiry(AccessToken, accessOptions).Seconds()),
 		RefreshExpiresIn: int64(m.tokenExpiry(RefreshToken, refreshOptions).Seconds()),
 	}, nil
+}
+
+// IssueAccessToken 按统一业务身份签发单个访问令牌（强制 TokenType 为 AccessToken）。
+func (m *TokenManager) IssueAccessToken(identity Identity, options ...*TokenOptions) (string, error) {
+	tokenOptions := DefaultTokenOptions()
+	if len(options) > 0 && options[0] != nil {
+		if options[0].TokenType != "" && options[0].TokenType != AccessToken {
+			return "", fmt.Errorf("%w: IssueAccessToken only issues %q, got %q", ErrTokenTypeMismatch, AccessToken, options[0].TokenType)
+		}
+		tokenOptions = cloneTokenOptions(options[0])
+	}
+	tokenOptions.TokenType = AccessToken
+	if strings.TrimSpace(tokenOptions.SessionID) == "" {
+		tokenOptions.SessionID = strings.TrimSpace(identity.SessionID)
+	}
+
+	claims, err := m.identityClaims(identity, tokenOptions.CustomClaims)
+	if err != nil {
+		return "", err
+	}
+	tokenOptions.CustomClaims = claims
+
+	return m.GenerateToken(strings.TrimSpace(identity.Subject), tokenOptions)
+}
+
+// Authenticate 是推荐的鉴权入口：验证 AccessToken 并直接返回归一化业务身份与声明。
+// 若传入 RefreshToken、吊销令牌或会话已注销，均安全拒绝。
+func (m *TokenManager) Authenticate(ctx context.Context, tokenStr string) (Identity, *StandardClaims, error) {
+	claims, err := m.ValidateAccessToken(ctx, tokenStr)
+	if err != nil {
+		return Identity{}, nil, err
+	}
+	return m.ExtractIdentity(claims), claims, nil
+}
+
+// ExtractIdentity 使用当前管理器的 TokenProfile 从声明中提取业务身份。
+func (m *TokenManager) ExtractIdentity(claims *StandardClaims) Identity {
+	if claims == nil {
+		return Identity{}
+	}
+	return claims.Identity(&m.tokenProfile)
 }
 
 // Identity 从声明中还原业务身份。
@@ -368,11 +344,10 @@ func (m *TokenManager) tokenExpiry(tokenType TokenType, options *TokenOptions) t
 	if options != nil && options.ExpiresIn > 0 {
 		return options.ExpiresIn
 	}
-	snap := m.snapshotConfig()
 	if tokenType == RefreshToken {
-		return snap.refreshTokenExpiry
+		return m.refreshTokenExpiry
 	}
-	return snap.accessTokenExpiry
+	return m.accessTokenExpiry
 }
 
 func putClaim(claims map[string]interface{}, key string, value interface{}) error {

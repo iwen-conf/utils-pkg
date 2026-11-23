@@ -118,39 +118,45 @@ func TestIsBrowserMatchesGetBrowserInfo(t *testing.T) {
 }
 
 func TestLRUCache_CapacityAndTTL(t *testing.T) {
-	if _, err := NewLRUCache(0, time.Second); !errors.Is(err, ErrInvalidCacheCapacity) {
+	if _, err := newBrowserLRUCache(0, time.Second); !errors.Is(err, errInvalidCacheCapacity) {
 		t.Fatalf("capacity 0: %v", err)
 	}
-	if _, err := NewLRUCache(1, -time.Second); !errors.Is(err, ErrInvalidCacheTTL) {
+	if _, err := newBrowserLRUCache(1, -time.Second); !errors.Is(err, errInvalidCacheTTL) {
 		t.Fatalf("negative ttl: %v", err)
 	}
-	cache, err := NewLRUCache(1, 20*time.Millisecond)
+	if _, err := newShardedBrowserCache(0, time.Second); !errors.Is(err, errInvalidCacheCapacity) {
+		t.Fatalf("sharded capacity 0: %v", err)
+	}
+	cache, err := newBrowserLRUCache(1, 20*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cache.Put("a", 1); err != nil {
+	if err := cache.put("a", BrowserInfo{IsBrowser: true, Name: "Chrome"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := cache.Put("b", 2); err != nil {
+	if err := cache.put("b", BrowserInfo{IsBrowser: true, Name: "Firefox"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := cache.Get("a"); ok {
+	if _, ok := cache.get("a"); ok {
 		t.Fatalf("capacity 1 should evict a")
 	}
+	if got, ok := cache.get("b"); !ok || got.Name != "Firefox" {
+		t.Fatalf("expected Firefox hit, got (%+v, %v)", got, ok)
+	}
 	time.Sleep(30 * time.Millisecond)
-	if _, ok := cache.Get("b"); ok {
+	if _, ok := cache.get("b"); ok {
 		t.Fatalf("ttl expired")
 	}
-	var nilCache *LRUCache
-	if _, ok := nilCache.Get("x"); ok {
+	var nilCache *browserLRUCache
+	if _, ok := nilCache.get("x"); ok {
 		t.Fatalf("nil get")
 	}
-	if err := nilCache.Put("x", 1); !errors.Is(err, ErrUninitializedCache) {
+	if err := nilCache.put("x", BrowserInfo{}); !errors.Is(err, errUninitializedCache) {
 		t.Fatalf("nil put: %v", err)
 	}
 
 	var wg sync.WaitGroup
-	live, err := NewLRUCache(8, time.Minute)
+	live, err := newBrowserLRUCache(8, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,8 +164,8 @@ func TestLRUCache_CapacityAndTTL(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_ = live.Put("k", i)
-			_, _ = live.Get("k")
+			_ = live.put("k", BrowserInfo{IsBrowser: true, Name: "Chrome"})
+			_, _ = live.get("k")
 		}(i)
 	}
 	wg.Wait()

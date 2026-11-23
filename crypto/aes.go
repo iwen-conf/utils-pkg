@@ -20,19 +20,7 @@ const (
 	EncodingURLSafe
 )
 
-// EncryptionMode 定义加密模式
-type EncryptionMode int
-
-const (
-	// ModeGCM AES-GCM 认证加密模式
-	ModeGCM EncryptionMode = iota
-	// ModeCFB 已不再支持；构造会失败。
-	ModeCFB
-)
-
 var (
-	// ErrUnsupportedEncryptionMode 表示请求了未实现的加密模式。
-	ErrUnsupportedEncryptionMode = errors.New("unsupported encryption mode")
 	// ErrUnsupportedEncoding 表示未知编码类型。
 	ErrUnsupportedEncoding = errors.New("unsupported encoding")
 	// ErrInvalidAESKeySize 表示密钥长度不是 16/24/32。
@@ -49,7 +37,13 @@ type Encryptor interface {
 	Decrypt(ciphertext string) ([]byte, error)
 	EncryptWithOptions(plaintext []byte, encoding EncodingType) (string, error)
 	DecryptWithOptions(ciphertext string, encoding EncodingType) ([]byte, error)
+	EncryptWithAAD(plaintext, aad []byte) (string, error)
+	DecryptWithAAD(ciphertext string, aad []byte) ([]byte, error)
+	EncryptWithAADAndEncoding(plaintext, aad []byte, encoding EncodingType) (string, error)
+	DecryptWithAADAndEncoding(ciphertext string, aad []byte, encoding EncodingType) ([]byte, error)
 }
+
+var _ Encryptor = (*AESEncryptor)(nil)
 
 // AESEncryptor 提供并发安全的 AES-GCM 认证加密。
 type AESEncryptor struct {
@@ -58,14 +52,6 @@ type AESEncryptor struct {
 
 // NewAESEncryptor 创建 AES-GCM 加密器。密钥必须为 16/24/32 字节且来自 CSPRNG 或 KMS。
 func NewAESEncryptor(key []byte) (*AESEncryptor, error) {
-	return NewAESEncryptorWithMode(key, ModeGCM)
-}
-
-// NewAESEncryptorWithMode 仅接受 ModeGCM。
-func NewAESEncryptorWithMode(key []byte, mode EncryptionMode) (*AESEncryptor, error) {
-	if mode != ModeGCM {
-		return nil, ErrUnsupportedEncryptionMode
-	}
 	switch len(key) {
 	case 16, 24, 32:
 	default:

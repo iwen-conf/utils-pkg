@@ -1,6 +1,7 @@
 package jwt
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -9,7 +10,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func TestValidateToken_CacheCannotOutliveExp(t *testing.T) {
+func TestValidateAccessToken_CacheCannotOutliveExp(t *testing.T) {
 	now := time.Unix(1_750_000_000, 0)
 	opts := DefaultJWTOptions()
 	opts.BlacklistCleanInterval = 0
@@ -18,32 +19,33 @@ func TestValidateToken_CacheCannotOutliveExp(t *testing.T) {
 
 	tm := MustNewTokenManager(testSecretKey, opts)
 	defer tm.Shutdown()
+	ctx := context.Background()
 
 	token, err := tm.GenerateToken("u-1", &TokenOptions{ExpiresIn: 2 * time.Second})
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
-	if _, err := tm.ValidateToken(token); err != nil {
-		t.Fatalf("first ValidateToken: %v", err)
+	if _, err := tm.ValidateAccessToken(ctx, token); err != nil {
+		t.Fatalf("first ValidateAccessToken: %v", err)
 	}
 	if tm.GetCacheSize() != 1 {
 		t.Fatalf("expected success result to be cached, got size=%d", tm.GetCacheSize())
 	}
 
 	now = now.Add(3 * time.Second)
-	_, err = tm.ValidateToken(token)
+	_, err = tm.ValidateAccessToken(ctx, token)
 	if !errors.Is(err, jwt.ErrTokenExpired) {
 		t.Fatalf("expected jwt.ErrTokenExpired after exp, got %v", err)
 	}
 	if _, _, found := tm.cache.get(token, now); found {
 		t.Fatalf("success cache must not survive token exp")
 	}
-	if _, err := tm.ValidateToken(token); !errors.Is(err, jwt.ErrTokenExpired) {
+	if _, err := tm.ValidateAccessToken(ctx, token); !errors.Is(err, jwt.ErrTokenExpired) {
 		t.Fatalf("second post-exp validate: %v", err)
 	}
 }
 
-func TestValidateToken_CacheTTLExpiresBeforeToken(t *testing.T) {
+func TestValidateAccessToken_CacheTTLExpiresBeforeToken(t *testing.T) {
 	now := time.Unix(1_750_000_000, 0)
 	opts := DefaultJWTOptions()
 	opts.BlacklistCleanInterval = 0
@@ -52,30 +54,32 @@ func TestValidateToken_CacheTTLExpiresBeforeToken(t *testing.T) {
 
 	tm := MustNewTokenManager(testSecretKey, opts)
 	defer tm.Shutdown()
+	ctx := context.Background()
 
 	token, err := tm.GenerateToken("u-1", &TokenOptions{ExpiresIn: time.Minute})
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
-	if _, err := tm.ValidateToken(token); err != nil {
-		t.Fatalf("first ValidateToken: %v", err)
+	if _, err := tm.ValidateAccessToken(ctx, token); err != nil {
+		t.Fatalf("first ValidateAccessToken: %v", err)
 	}
 
 	now = now.Add(6 * time.Second)
 	if _, _, found := tm.cache.get(token, now); found {
 		t.Fatalf("expected cache entry to expire after CacheTTL")
 	}
-	if _, err := tm.ValidateToken(token); err != nil {
+	if _, err := tm.ValidateAccessToken(ctx, token); err != nil {
 		t.Fatalf("token should still be valid after cache TTL: %v", err)
 	}
 }
 
-func TestValidateToken_InvalidTokensDoNotPolluteOrEvictValidCache(t *testing.T) {
+func TestValidateAccessToken_InvalidTokensDoNotPolluteOrEvictValidCache(t *testing.T) {
 	opts := DefaultJWTOptions()
 	opts.BlacklistCleanInterval = 0
 	opts.CacheSize = 4
 	tm := MustNewTokenManager(testSecretKey, opts)
 	defer tm.Shutdown()
+	ctx := context.Background()
 
 	validTokens := make([]string, 4)
 	for i := range validTokens {
@@ -83,15 +87,15 @@ func TestValidateToken_InvalidTokensDoNotPolluteOrEvictValidCache(t *testing.T) 
 		if err != nil {
 			t.Fatalf("GenerateToken: %v", err)
 		}
-		if _, err := tm.ValidateToken(tok); err != nil {
-			t.Fatalf("ValidateToken: %v", err)
+		if _, err := tm.ValidateAccessToken(ctx, tok); err != nil {
+			t.Fatalf("ValidateAccessToken: %v", err)
 		}
 		validTokens[i] = tok
 	}
 
 	// Flood with 100 invalid tokens -> must NOT evict any of the 4 cached valid tokens!
 	for i := 0; i < 100; i++ {
-		_, _ = tm.ValidateToken(fmt.Sprintf("bad-%d.invalid.signature", i))
+		_, _ = tm.ValidateAccessToken(ctx, fmt.Sprintf("bad-%d.invalid.signature", i))
 	}
 	if tm.GetCacheSize() != 4 {
 		t.Fatalf("expected 4 valid cached tokens retained, got %d", tm.GetCacheSize())
@@ -149,55 +153,56 @@ func TestCachePut_CloneFailureDoesNotGrowCache(t *testing.T) {
 	}
 }
 
-func TestCacheDynamicConfigUpdatesTakeImmediateEffect(t *testing.T) {
+func TestCacheImmutableConfigBoundsAndDisabledCache(t *testing.T) {
 	now := time.Unix(1_750_000_000, 0)
 	opts := DefaultJWTOptions()
 	opts.BlacklistCleanInterval = 0
-	opts.CacheSize = 5
+	opts.CacheSize = 2
 	opts.CacheTTL = 10 * time.Minute
 	opts.Clock = func() time.Time { return now }
 
 	tm := MustNewTokenManager(testSecretKey, opts)
 	defer tm.Shutdown()
+	ctx := context.Background()
 
-	for i := 0; i < 5; i++ {
+	tokens := make([]string, 5)
+	for i := range tokens {
 		tok, err := tm.GenerateToken(fmt.Sprintf("u-%d", i), &TokenOptions{ExpiresIn: time.Hour})
 		if err != nil {
 			t.Fatalf("GenerateToken: %v", err)
 		}
-		if _, err := tm.ValidateToken(tok); err != nil {
-			t.Fatalf("ValidateToken: %v", err)
+		if _, err := tm.ValidateAccessToken(ctx, tok); err != nil {
+			t.Fatalf("ValidateAccessToken: %v", err)
 		}
-	}
-	if tm.GetCacheSize() != 5 {
-		t.Fatalf("expected 5 cached items, got %d", tm.GetCacheSize())
-	}
-
-	// Shrinking CacheSize immediately evicts excess LRU entries.
-	if err := tm.SetCacheSize(2); err != nil {
-		t.Fatalf("SetCacheSize: %v", err)
+		tokens[i] = tok
 	}
 	if tm.GetCacheSize() != 2 {
-		t.Fatalf("expected cache resized to 2 immediately, got %d", tm.GetCacheSize())
+		t.Fatalf("expected cache strictly bounded at 2, got %d", tm.GetCacheSize())
 	}
 
-	// Shrinking CacheTTL clamps existing validUntil.
-	if err := tm.SetCacheTTL(5 * time.Second); err != nil {
-		t.Fatalf("SetCacheTTL: %v", err)
-	}
-	now = now.Add(6 * time.Second)
-	if cleaned := tm.cache.cleanExpired(now); cleaned != 2 || tm.GetCacheSize() != 0 {
-		t.Fatalf("expected clamped entries expired, cleaned=%d size=%d", cleaned, tm.GetCacheSize())
+	// Verify map uses SHA-256 digest keys rather than raw JWT strings.
+	tm.cache.mu.Lock()
+	_, hasLatestDigest := tm.cache.items[cacheKey(tokens[4])]
+	tm.cache.mu.Unlock()
+	if !hasLatestDigest {
+		t.Fatalf("expected cache to index by SHA-256 digest of token")
 	}
 
-	// EnableCache(false) clears existing cache entries immediately.
-	tok, _ := tm.GenerateToken("u-clear")
-	_, _ = tm.ValidateToken(tok)
-	if tm.GetCacheSize() != 1 {
-		t.Fatalf("expected 1 entry before disable")
+	// EnableCache: false disables caching completely.
+	disabledOpts := DefaultJWTOptions()
+	disabledOpts.BlacklistCleanInterval = 0
+	disabledOpts.EnableCache = false
+	tmNoCache := MustNewTokenManager(testSecretKey, disabledOpts)
+	defer tmNoCache.Shutdown()
+
+	tok, err := tmNoCache.GenerateToken("u-nocache")
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
 	}
-	tm.EnableCache(false)
-	if tm.GetCacheSize() != 0 {
-		t.Fatalf("expected cache cleared on EnableCache(false), got %d", tm.GetCacheSize())
+	if _, err := tmNoCache.ValidateAccessToken(ctx, tok); err != nil {
+		t.Fatalf("ValidateAccessToken: %v", err)
+	}
+	if tmNoCache.GetCacheSize() != 0 {
+		t.Fatalf("expected 0 cached entries when EnableCache=false, got %d", tmNoCache.GetCacheSize())
 	}
 }

@@ -1,6 +1,29 @@
-# v0.6.0 升级与 API 迁移指南
+# 升级与 API 迁移指南
 
-本文档汇总 `utils-pkg` 从 `v0.3.0` 升级到 `v0.6.0` 的兼容性影响、修改前后代码对比及迁移步骤。`v0.4.0` 已包含安全破坏性变更；`v0.5.0` 收敛 JWT 生命周期 API，并补充 AES-GCM AAD 与泛型 `ptr` 辅助函数；`v0.6.0` 移除 `errors` 包。
+本文档汇总 `utils-pkg` 从 `v0.3.0` 升级至当前 `Unreleased`（`v0.6.0` 之后收敛改动）的兼容性影响、修改前后代码对比及迁移步骤。`v0.4.0` 已包含安全破坏性变更；`v0.5.0` 收敛 JWT 生命周期 API；`v0.6.0` 移除 `errors` 包；当前未发布变更进一步清理历史冗余与弱类型接口，并为 `jwt` 增加 `kid` 密钥轮换。
+
+---
+
+## 零、Unreleased 全面收敛变更（`v0.6.0` 之后）
+
+1. **`url` 包重命名为 `signedurl`**：
+   - 导入路径从 `github.com/iwen-conf/utils-pkg/url` 改为 `github.com/iwen-conf/utils-pkg/signedurl`（避免与标准库 `net/url` 重名）。
+   - 移除弱类型辅助函数 `ParseURL`、`SerializeParams`、`DeserializeParams`（请直接使用标准库 `net/url` 的 `url.Parse` / `url.Values`）。
+2. **`ptr` 收敛为纯泛型 API**：
+   - 仅保留 `Of[T]`、`Value[T]`、`Deref[T]`、`Zero[T]` 与 `ErrNilPointer`，移除全部 60 个 Go 1.18 前的类型化函数（如 `String`、`SafeInt`、`ValueBool` 等）。
+3. **`useragent` 私有化缓存**：
+   - 移除导出的 `LRUCache`、`NewLRUCache`、`ShardedCache`、`NewShardedCache` 与 `ErrInvalidCacheCapacity` / `ErrInvalidCacheTTL` / `ErrUninitializedCache`；保留 `MaxUserAgentLength`、`BrowserInfo`、`IsBrowser`、`GetBrowserInfo`。
+4. **`crypto` 统一 fail-fast 构造与 AAD 接口**：
+   - 移除 `EncryptionMode`、`ModeGCM`、`ModeCFB`、`ErrUnsupportedEncryptionMode`、`NewAESEncryptorWithMode`（统一使用 `NewAESEncryptor`）。
+   - `Encryptor` 接口现包含 `EncryptWithAAD`、`DecryptWithAAD`、`EncryptWithAADAndEncoding`、`DecryptWithAADAndEncoding`。
+   - `NewBcryptHasher(cost)` 直接返回 `(*BcryptHasher, error)`，移除原有的 `NewBcryptHasherChecked` 与 `BenchmarkPasswordHashers*`。
+5. **`pagination` 泛型游标入口**：
+   - 新增 `EncodeCursor[T]`、`DecodeCursor[T]` 与 `ErrNilCodec`；`Base64JSONCodec.Decode` 改用 `%w` 保留底层错误链。
+6. **`jwt` API 收敛、不可变配置与 `kid` 密钥轮换**：
+   - **移除冗余/废弃方法**：移除 `GenerateTokenPair`、`GenerateIdentityToken`、`GenerateIdentityTokenPair`、`ValidateToken`、`ValidateTokenContext`、`RefreshToken`、`RefreshTokenContext`、`IsBlacklisted`，以及无 `ctx` 的 `RevokeToken`/`RevokeSession`/`CleanBlacklist`/`GetBlacklistSize`。
+   - **方法更名**：原 `*Context` 方法更名为唯一主方法：`RevokeToken(ctx, tok)`、`RevokeSession(ctx, tok)`、`IsTokenRevoked(ctx, tok)`、`IsSessionRevoked(ctx, sid)`、`CleanBlacklist(ctx)`、`GetBlacklistSize(ctx)`；请统一使用 `IssueTokenPair`、`IssueAccessToken`、`Authenticate`、`ValidateAccessToken`、`ValidateRefreshToken`、`RefreshTokenPair`、`RevokeSessionByID`。
+   - **构造后不可变**：移除 `EnableLog` 与运行时 `Set*` / `EnableCache` 方法，全部配置请在构造 `JWTOptions` 时确定。
+   - **密钥轮换**：通过 `JWTOptions.SigningKeyID`、`VerificationKeys`、`LegacyVerificationKey` 支持 `kid` 多密钥验签与无缝轮换。
 
 ---
 
@@ -64,15 +87,15 @@ newPair, err := tm.RefreshTokenPair(ctx, pair.RefreshToken)
 err = tm.RevokeSessionByID(ctx, newPair.SessionID)
 ```
 
-> **兼容性保证**：原有的 `GenerateToken`、`GenerateTokenPair`、`GenerateIdentityToken`、`GenerateIdentityTokenPair`、`ValidateToken`、`ValidateTokenContext`、`RefreshToken`、`RefreshTokenContext`、`RevokeToken`、`RevokeSession` 签名均完整保留。
+> **兼容性说明**：上述 `GenerateTokenPair`、`GenerateIdentityToken`、`GenerateIdentityTokenPair`、`ValidateToken`、`ValidateTokenContext`、`RefreshToken`、`RefreshTokenContext` 等过渡接口仅保留至 `v0.6.0`，已于 `Unreleased` 全面收敛移除（详见第零节）。
 
 ---
 
 ## 二、Crypto 模块迁移
 
-1. **AES 加密仅支持 `ModeGCM`**：
-   - `NewAESEncryptor(key)` 直接创建并发安全的 AES-GCM 实例；`NewAESEncryptorWithMode(key, crypto.ModeCFB)` 直接返回 `crypto.ErrUnsupportedEncryptionMode`。
-   - 新增 `EncryptWithAAD` / `DecryptWithAAD`，建议将记录主键或用户 ID 作为 AAD 传入以防止密文跨记录替换。
+1. **AES 加密仅支持 AES-GCM**：
+   - 统一使用 `NewAESEncryptor(key)` 创建并发安全的 AES-GCM 实例（`ModeCFB` 与 `NewAESEncryptorWithMode` 已于 `Unreleased` 移除）。
+   - `Encryptor` 接口现统一包含 `EncryptWithAAD` / `DecryptWithAAD` 等 AAD 方法，建议将记录主键或用户 ID 作为 AAD 传入以防止密文跨记录替换。
 2. **`PasswordPolicy` 改为不可变配置快照**：
    - 修改前：`policy.MinLength = 10`（存在并发数据竞争，已移除公开可变字段）。
    - 修改后：
@@ -81,8 +104,8 @@ err = tm.RevokeSessionByID(ctx, newPair.SessionID)
      cfg.MinLength = 10
      policy, err := crypto.NewPasswordPolicy(cfg)
      ```
-3. **哈希器构造函数返回 `(Hasher, error)`**：
-   - `NewArgon2Hasher(params)`、`NewScryptHasher(params)`、`NewBcryptHasherChecked(cost)` 均在构造期校验参数并返回 `error`。
+3. **哈希器构造函数统一返回 `(Hasher, error)`**：
+   - `NewArgon2Hasher(params)`、`NewScryptHasher(params)`、`NewBcryptHasher(cost)` 均在构造期校验参数并返回 `error`（`NewBcryptHasherChecked` 与 `BenchmarkPasswordHashers*` 已于 `Unreleased` 移除）。
 
 ---
 
@@ -94,9 +117,9 @@ err = tm.RevokeSessionByID(ctx, newPair.SessionID)
 
 ---
 
-## 四、URL / Pagination / Ptr / UserAgent 迁移要点
+## 四、SignedURL / Pagination / Ptr / UserAgent 迁移要点
 
-- **URL**：签名升级为 `_sigv=2`，密钥至少 32 字节；非 GET 请求请使用 `SetMethod` 与 `ValidateSignatureWithMethod`。
-- **Pagination**：`NewHMACCodec(key)` 在密钥为空或不足 32 字节时返回 `(nil, error)`，不再降级运行。
-- **Ptr**：新增泛型 `ptr.Of(v)`、`ptr.Deref(p, fallback)`、`ptr.Zero(p)`、`ptr.Value(p)`，原有 `ptr.String` / `ptr.SafeString` / `ptr.ValueString` 等全部保留。
-- **UserAgent**：`NewLRUCache(capacity, ttl)` 与 `NewShardedCache(shardCapacity, ttl)` 的 `ttl` 参数类型为 `time.Duration`（如 `30 * time.Minute`），构造期校验参数并返回 `error`。
+- **SignedURL**：包名由 `url` 更名为 `signedurl`；签名升级为 `_sigv=2`，密钥至少 32 字节；非 GET 请求请使用 `SetMethod` 与 `ValidateSignatureWithMethod`；弱类型 `ParseURL` / `SerializeParams` / `DeserializeParams` 已移除。
+- **Pagination**：`NewHMACCodec(key)` 在密钥为空或不足 32 字节时返回 `(nil, error)`，不再降级运行；新增泛型 `EncodeCursor[T]` / `DecodeCursor[T]` 与 `ErrNilCodec`。
+- **Ptr**：已收敛为纯泛型 `ptr.Of(v)`、`ptr.Deref(p, fallback)`、`ptr.Zero(p)`、`ptr.Value(p)`，全部 60 个历史类型化函数已于 `Unreleased` 移除。
+- **UserAgent**：浏览器缓存已私有化为包内强类型懒加载实现，不再导出 `LRUCache` / `ShardedCache` 及相关构造函数；结果仍仅用于启发式展示。

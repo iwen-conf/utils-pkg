@@ -175,8 +175,8 @@ func TestExplicitRevokeRefreshTokenDoesNotFalselyTriggerReuse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IssueTokenPair: %v", err)
 	}
-	if err := tm.RevokeTokenContext(ctx, pair.RefreshToken); err != nil {
-		t.Fatalf("RevokeTokenContext: %v", err)
+	if err := tm.RevokeToken(ctx, pair.RefreshToken); err != nil {
+		t.Fatalf("RevokeToken: %v", err)
 	}
 
 	_, err = tm.RefreshTokenPair(ctx, pair.RefreshToken)
@@ -324,8 +324,8 @@ func TestTokenProfileValidationAndTokenSizeGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tmB.IssueTokenPair: %v", err)
 	}
-	if err := tmA.RevokeSessionContext(context.Background(), pairB.AccessToken); !errors.Is(err, jwt.ErrTokenInvalidIssuer) {
-		t.Fatalf("expected cross-issuer RevokeSessionContext to fail with ErrTokenInvalidIssuer, got %v", err)
+	if err := tmA.RevokeSession(context.Background(), pairB.AccessToken); !errors.Is(err, jwt.ErrTokenInvalidIssuer) {
+		t.Fatalf("expected cross-issuer RevokeSession to fail with ErrTokenInvalidIssuer, got %v", err)
 	}
 }
 

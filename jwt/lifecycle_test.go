@@ -48,24 +48,6 @@ func TestNewTokenManager_InvalidOptions(t *testing.T) {
 	}
 }
 
-func TestTokenManager_SettersRejectInvalidValues(t *testing.T) {
-	tm := MustNewTokenManager(testSecretKey)
-	defer tm.Shutdown()
-
-	if err := tm.SetCacheTTL(0); !errors.Is(err, ErrInvalidCacheTTL) {
-		t.Fatalf("SetCacheTTL(0): %v", err)
-	}
-	if err := tm.SetCacheSize(-1); !errors.Is(err, ErrInvalidCacheSize) {
-		t.Fatalf("SetCacheSize(-1): %v", err)
-	}
-	if err := tm.SetTokenExpiry(AccessToken, 0); !errors.Is(err, ErrInvalidTokenExpiry) {
-		t.Fatalf("SetTokenExpiry(0): %v", err)
-	}
-	if err := tm.SetTokenExpiry(TokenType("nope"), time.Minute); !errors.Is(err, ErrUnknownTokenType) {
-		t.Fatalf("unknown type: %v", err)
-	}
-}
-
 func TestTokenManager_ShutdownIdempotentAndConcurrent(t *testing.T) {
 	opts := DefaultJWTOptions()
 	opts.BlacklistCleanInterval = 20 * time.Millisecond
@@ -83,23 +65,24 @@ func TestTokenManager_ShutdownIdempotentAndConcurrent(t *testing.T) {
 	tm.Shutdown()
 }
 
-func TestGetBlacklistSizeContext_UnsupportedStore(t *testing.T) {
+func TestGetBlacklistSize_UnsupportedStore(t *testing.T) {
 	opts := DefaultJWTOptions()
 	opts.RevocationStore = unsupportedSizeStore{}
 	tm := MustNewTokenManager(testSecretKey, opts)
 	defer tm.Shutdown()
 
-	_, err := tm.GetBlacklistSizeContext(context.Background())
+	_, err := tm.GetBlacklistSize(context.Background())
 	if !errors.Is(err, ErrBlacklistSizeUnsupported) {
 		t.Fatalf("expected ErrBlacklistSizeUnsupported, got %v", err)
 	}
 }
 
-func TestErrorReporter_ReceivesStoreErrorsWithoutSecrets(t *testing.T) {
+func TestErrorReporter_ReceivesBackgroundCleanErrorsWithoutSecrets(t *testing.T) {
 	var mu sync.Mutex
 	var seen []error
 	storeErr := errors.New("backend unavailable")
 	opts := DefaultJWTOptions()
+	opts.BlacklistCleanInterval = 10 * time.Millisecond
 	opts.RevocationStore = &reportingRevocationStore{err: storeErr}
 	opts.ErrorReporter = func(err error) {
 		mu.Lock()
@@ -107,20 +90,28 @@ func TestErrorReporter_ReceivesStoreErrorsWithoutSecrets(t *testing.T) {
 		mu.Unlock()
 	}
 	tm := MustNewTokenManager(testSecretKey, opts)
-	defer tm.Shutdown()
 
-	_ = tm.IsBlacklisted("aaaaaaaaaa.bbbbbbbbbb.cccccccccc")
-	tm.CleanBlacklist()
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		count := len(seen)
+		mu.Unlock()
+		if count > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	tm.Shutdown()
 
 	mu.Lock()
 	defer mu.Unlock()
 	if len(seen) == 0 {
-		t.Fatalf("expected reporter to receive store errors")
+		t.Fatalf("expected reporter to receive background store clean errors")
 	}
 	for _, err := range seen {
 		msg := err.Error()
-		if strings.Contains(msg, testSecretKey) || strings.Contains(msg, "aaaaaaaaaa.bbbbbbbbbb.cccccccccc") {
-			t.Fatalf("reporter error leaked secret or token: %s", msg)
+		if strings.Contains(msg, testSecretKey) {
+			t.Fatalf("reporter error leaked secret: %s", msg)
 		}
 		if !errors.Is(err, storeErr) {
 			t.Fatalf("reporter error should wrap store error: %v", err)
@@ -128,9 +119,10 @@ func TestErrorReporter_ReceivesStoreErrorsWithoutSecrets(t *testing.T) {
 	}
 }
 
-func TestValidateGenerateConcurrentWithSetters(t *testing.T) {
+func TestValidateGenerateConcurrent(t *testing.T) {
 	tm := MustNewTokenManager(testSecretKey)
 	defer tm.Shutdown()
+	ctx := context.Background()
 
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -143,25 +135,13 @@ func TestValidateGenerateConcurrentWithSetters(t *testing.T) {
 					t.Errorf("GenerateToken: %v", err)
 					return
 				}
-				if _, err := tm.ValidateToken(token); err != nil {
-					t.Errorf("ValidateToken: %v", err)
+				if _, err := tm.ValidateAccessToken(ctx, token); err != nil {
+					t.Errorf("ValidateAccessToken: %v", err)
 					return
 				}
 			}
 		}()
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 20; i++ {
-			_ = tm.SetCacheTTL(time.Minute)
-			_ = tm.SetCacheSize(100)
-			_ = tm.SetTokenExpiry(AccessToken, 10*time.Minute)
-			tm.SetIssuer("iss")
-			tm.SetAudience("aud")
-			tm.EnableLog(i%2 == 0)
-		}
-	}()
 	wg.Wait()
 }
 
