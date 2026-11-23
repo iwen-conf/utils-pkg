@@ -2,7 +2,7 @@
 
 面向 Go 1.24+ 业务工程的基础工具库，遵循**构造期快速失败（Fail-Fast）**、**标准错误链（`%w` + `errors.Is` / `errors.As`）**与**安全默认边界**原则。
 
-> 版本状态：`Version()` = `v0.6.0`。许可证：[MIT](LICENSE) © 2025-2026 iwen-conf。
+> 版本状态：`Version()` = `v0.7.0`。许可证：[MIT](LICENSE) © 2025-2026 iwen-conf。
 
 ## 模块概览
 

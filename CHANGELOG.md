@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0]
+
 ### Added
 
 - **JWT**:
@@ -28,6 +30,7 @@ All notable changes to this project are documented in this file.
 - **User-Agent**: Unexported `LRUCache`, `NewLRUCache`, `ShardedCache`, `NewShardedCache`, and `ErrInvalidCacheCapacity` / `ErrInvalidCacheTTL` / `ErrUninitializedCache`.
 - **Crypto**: Removed `EncryptionMode`, `ModeGCM`, `ModeCFB`, `ErrUnsupportedEncryptionMode`, `NewAESEncryptorWithMode`, `NewBcryptHasherChecked`, `BenchmarkPasswordHashers`, `BenchmarkPasswordHashersChecked`, and `ErrInvalidBenchmarkIterations`.
 - **JWT**: Removed `EnableLog`, runtime setters (`EnableCache`, `SetCacheTTL`, `SetCacheSize`, `SetTokenExpiry`, `SetIssuer`, `SetAudience`), and legacy/deprecated methods (`GenerateTokenPair`, `GenerateIdentityToken`, `GenerateIdentityTokenPair`, `ValidateToken`, `ValidateTokenContext`, `RefreshToken`, `RefreshTokenContext`, `IsBlacklisted`, and old no-context `RevokeToken`/`RevokeSession`/`CleanBlacklist`/`GetBlacklistSize`).
+- `Version()` is `v0.7.0`.
 
 ## [0.6.0]
 
